@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <h1>Import from PDF / Word (Teacher)</h1>
+  <p class="muted">
+    Best for math formatting: upload a <b>PDF</b>. We will create one draft question per PDF page as an image (format preserved).
+    DOCX import is text-based and may not preserve equations.
+  </p>
+
+  <form method="post" action="{{ url_for('teacher.doc_import_post') }}" enctype="multipart/form-data" class="form">
+    <label>Default skill (all imported drafts go here, you can change later in edit)</label>
+    <select name="default_skill_id" required>
+      <option value="">— choose —</option>
+      {% for s in skills %}
+        <option value="{{ s.id }}">{{ s.name }}</option>
+      {% endfor %}
+    </select>
+
+    <label>File (.pdf or .docx)</label>
+    <input type="file" name="file" accept=".pdf,.docx" required>
+
+    <button class="btn" type="submit">Import</button>
+  </form>
+
+  <div class="notice">
+    After import, go to <b>Questions</b> tab → click <b>Edit</b> to set question type/options/answer. Then the chairman approves.
+  </div>
+</div>
+{% endblock %}

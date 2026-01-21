@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <h1>Edit question #{{ q.id }}</h1>
+  <div class="muted">Status: <code>{{ q.status }}</code></div>
+
+  <form method="post" class="form">
+    <label>Skill</label>
+    <select name="skill_id" required>
+      {% for s in skills %}
+        <option value="{{ s.id }}" {{ 'selected' if s.id == q.skill_id else '' }}>{{ s.name }}</option>
+      {% endfor %}
+    </select>
+
+    <label>Type</label>
+    <select name="qtype" required>
+      {% for t in ['mcq_single','mcq_multi','true_false','short_text','image_mcq_single','video_cued_mcq_single'] %}
+        <option value="{{ t }}" {{ 'selected' if t == q.qtype else '' }}>{{ t }}</option>
+      {% endfor %}
+    </select>
+
+    <label>Prompt</label>
+    <textarea name="prompt" rows="6" required>{{ q.prompt }}</textarea>
+
+    <label>Options (one per line) — required for MCQ types</label>
+    <textarea name="options" rows="5">{{ (q.options_json|loads or [])|join('\n') }}</textarea>
+
+    <label>Answer</label>
+    <div class="notice">
+      mcq_single/true_false/image/video: index 0-based (e.g. 1)<br>
+      mcq_multi: comma separated indices (e.g. 0,2)<br>
+      short_text: exact expected text
+    </div>
+    <input name="answer" value="{% if q.answer_json %}{{ q.answer_json|loads }}{% endif %}">
+
+    <label>Meta JSON (optional)</label>
+    <textarea name="meta" rows="3">{{ q.meta_json or '' }}</textarea>
+
+    <button class="btn" type="submit">Save</button>
+  </form>
+
+  <a class="linkBtn" href="{{ url_for('chairman.question_tool') }}">Back</a>
+</div>
+{% endblock %}

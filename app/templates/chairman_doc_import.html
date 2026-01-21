@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <h1>Import from PDF / Word (Chairman)</h1>
+  <p class="muted">
+    Best for math formatting: upload a <b>PDF</b>. We create one draft question per page as an image.
+    DOCX import is text-based and may not preserve equations.
+  </p>
+
+  <form method="post" action="{{ url_for('chairman.doc_import_post') }}" enctype="multipart/form-data" class="form">
+    <label>Default skill</label>
+    <select name="default_skill_id" required>
+      <option value="">— choose —</option>
+      {% for s in skills %}
+        <option value="{{ s.id }}">{{ s.name }}</option>
+      {% endfor %}
+    </select>
+
+    <label>File (.pdf or .docx)</label>
+    <input type="file" name="file" accept=".pdf,.docx" required>
+
+    <button class="btn" type="submit">Import</button>
+  </form>
+
+  <div class="notice">
+    After import, go to <b>Questions</b> tab → click <b>Edit</b>, then approve when ready.
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ title or brand.name }}</title>
+  <link rel="icon" href="{{ brand.favicon_path }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}">
+  <style>:root{--primary: {{ brand.primary_color }};}</style>
+</head>
+<body>
+  <header class="top">
+    <div class="container top-inner">
+      <div class="brand"><img class="brand-logo" src="{{ brand.logo_path }}" alt="logo" onerror="this.style.display='none'"> <span class="brand-text">{{ brand.name }}</span></div>
+      <nav class="nav">
+        {% if current_user.is_authenticated %}
+          <span class="pill">{{ current_user.role }}: {{ current_user.name }} ({{ current_user.id }})</span>
+          <a class="link" href="{{ url_for('auth.logout') }}">Logout</a>
+        {% else %}
+          <a class="link" href="{{ url_for('auth.login') }}">Login</a>
+        {% endif %}
+      </nav>
+    </div>
+  </header>
+
+{% if current_user.is_authenticated %}
+<div class="toplinks">
+  <div class="container toplinks-inner">
+    {% if current_user.role == 'student' %}
+      <a class="tab" href="{{ url_for('student.dashboard') }}">Dashboard</a>
+    {% elif current_user.role == 'teacher' %}
+      <a class="tab" href="{{ url_for('teacher.dashboard') }}">Dashboard</a>
+      <a class="tab" href="{{ url_for('teacher.question_tool') }}">Questions</a>
+      <a class="tab" href="{{ url_for('teacher.media_library') }}">Media</a>
+      <a class="tab" href="{{ url_for('teacher.question_import') }}">Import Q</a>
+        <a class="tab" href="{{ url_for('teacher.doc_import') }}">Import PDF/DOCX</a>
+      <a class="tab" href="{{ url_for('teacher.reports') }}">Reports</a>
+      <a class="tab" href="{{ url_for('teacher.export_attempts_csv') }}">Export Attempts</a>
+      <a class="tab" href="{{ url_for('teacher.export_students_csv') }}">Export Students</a>
+    {% elif current_user.role == 'chairman' %}
+      <a class="tab" href="{{ url_for('chairman.dashboard') }}">Dashboard</a>
+      <a class="tab" href="{{ url_for('chairman.users') }}">Users</a>
+      <a class="tab" href="{{ url_for('chairman.skills') }}">Skills</a>
+      <a class="tab" href="{{ url_for('chairman.question_tool') }}">Questions</a>
+      <a class="tab" href="{{ url_for('chairman.media_library') }}">Media</a>
+      <a class="tab" href="{{ url_for('chairman.question_import') }}">Import Q</a>
+        <a class="tab" href="{{ url_for('chairman.doc_import') }}">Import PDF/DOCX</a>
+      <a class="tab" href="{{ url_for('chairman.attempts') }}">Attempts</a>
+      <a class="tab" href="{{ url_for('chairman.export_attempts_csv') }}">Export Attempts</a>
+    {% endif %}
+  </div>
+</div>
+{% endif %}
+
+  <main class="container">
+    {% with messages = get_flashed_messages(with_categories=True) %}
+      {% if messages %}
+        <div class="flash-wrap">
+          {% for cat,msg in messages %}
+            <div class="flash {{ cat }}">{{ msg }}</div>
+          {% endfor %}
+        </div>
+      {% endif %}
+    {% endwith %}
+
+    {% block content %}{% endblock %}
+  </main>
+
+  <footer class="footer">
+    <div class="container small">{{ brand.tagline }} — <span class="muted small">APP_VERSION=v5.1</span></div>
+  </footer>
+</body>
+</html>
