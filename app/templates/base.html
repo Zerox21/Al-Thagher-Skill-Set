@@ -14,42 +14,33 @@
       <div class="brand"><img class="brand-logo" src="{{ brand.logo_path }}" alt="logo" onerror="this.style.display='none'"> <span class="brand-text">{{ brand.name }}</span></div>
       <nav class="nav">
         {% if current_user.is_authenticated %}
-          <span class="pill">{{ current_user.role }}: {{ current_user.name }} ({{ current_user.id }})</span>
-          <a class="link" href="{{ url_for('auth.logout') }}">Logout</a>
-        {% else %}
-          <a class="link" href="{{ url_for('auth.login') }}">Login</a>
-        {% endif %}
-      </nav>
+  <div class="toplinks">
+    <div class="container toplinks-inner">
+      {% set vf = current_app.view_functions %}
+      {% if current_user.role == 'student' %}
+        {% if 'student.dashboard' in vf %}<a class="tab" href="{{ url_for('student.dashboard') }}">Dashboard</a>{% endif %}
+      {% elif current_user.role == 'teacher' %}
+        {% if 'teacher.dashboard' in vf %}<a class="tab" href="{{ url_for('teacher.dashboard') }}">Dashboard</a>{% endif %}
+        {% if 'teacher.question_tool' in vf %}<a class="tab" href="{{ url_for('teacher.question_tool') }}">Questions</a>{% endif %}
+        {% if 'teacher.media_library' in vf %}<a class="tab" href="{{ url_for('teacher.media_library') }}">Media</a>{% endif %}
+        {% if 'teacher.question_import' in vf %}<a class="tab" href="{{ url_for('teacher.question_import') }}">Import Q</a>{% endif %}
+        {% if 'teacher.doc_import' in vf %}<a class="tab" href="{{ url_for('teacher.doc_import') }}">Import PDF/DOCX</a>{% endif %}
+        {% if 'teacher.reports' in vf %}<a class="tab" href="{{ url_for('teacher.reports') }}">Reports</a>{% endif %}
+        {% if 'teacher.export_attempts_csv' in vf %}<a class="tab" href="{{ url_for('teacher.export_attempts_csv') }}">Export Attempts</a>{% endif %}
+        {% if 'teacher.export_students_csv' in vf %}<a class="tab" href="{{ url_for('teacher.export_students_csv') }}">Export Students</a>{% endif %}
+      {% elif current_user.role == 'chairman' %}
+        {% if 'chairman.dashboard' in vf %}<a class="tab" href="{{ url_for('chairman.dashboard') }}">Dashboard</a>{% endif %}
+        {% if 'chairman.users' in vf %}<a class="tab" href="{{ url_for('chairman.users') }}">Users</a>{% endif %}
+        {% if 'chairman.skills' in vf %}<a class="tab" href="{{ url_for('chairman.skills') }}">Skills</a>{% endif %}
+        {% if 'chairman.question_tool' in vf %}<a class="tab" href="{{ url_for('chairman.question_tool') }}">Questions</a>{% endif %}
+        {% if 'chairman.media_library' in vf %}<a class="tab" href="{{ url_for('chairman.media_library') }}">Media</a>{% endif %}
+        {% if 'chairman.question_import' in vf %}<a class="tab" href="{{ url_for('chairman.question_import') }}">Import Q</a>{% endif %}
+        {% if 'chairman.doc_import' in vf %}<a class="tab" href="{{ url_for('chairman.doc_import') }}">Import PDF/DOCX</a>{% endif %}
+        {% if 'chairman.attempts' in vf %}<a class="tab" href="{{ url_for('chairman.attempts') }}">Attempts</a>{% endif %}
+        {% if 'chairman.export_attempts_csv' in vf %}<a class="tab" href="{{ url_for('chairman.export_attempts_csv') }}">Export Attempts</a>{% endif %}
+      {% endif %}
     </div>
-  </header>
-
-{% if current_user.is_authenticated %}
-<div class="toplinks">
-  <div class="container toplinks-inner">
-    {% if current_user.role == 'student' %}
-      <a class="tab" href="{{ url_for('student.dashboard') }}">Dashboard</a>
-    {% elif current_user.role == 'teacher' %}
-      <a class="tab" href="{{ url_for('teacher.dashboard') }}">Dashboard</a>
-      <a class="tab" href="{{ url_for('teacher.question_tool') }}">Questions</a>
-      <a class="tab" href="{{ url_for('teacher.media_library') }}">Media</a>
-      <a class="tab" href="{{ url_for('teacher.question_import') }}">Import Q</a>
-        <a class="tab" href="{{ url_for('teacher.doc_import') }}">Import PDF/DOCX</a>
-      <a class="tab" href="{{ url_for('teacher.reports') }}">Reports</a>
-      <a class="tab" href="{{ url_for('teacher.export_attempts_csv') }}">Export Attempts</a>
-      <a class="tab" href="{{ url_for('teacher.export_students_csv') }}">Export Students</a>
-    {% elif current_user.role == 'chairman' %}
-      <a class="tab" href="{{ url_for('chairman.dashboard') }}">Dashboard</a>
-      <a class="tab" href="{{ url_for('chairman.users') }}">Users</a>
-      <a class="tab" href="{{ url_for('chairman.skills') }}">Skills</a>
-      <a class="tab" href="{{ url_for('chairman.question_tool') }}">Questions</a>
-      <a class="tab" href="{{ url_for('chairman.media_library') }}">Media</a>
-      <a class="tab" href="{{ url_for('chairman.question_import') }}">Import Q</a>
-        <a class="tab" href="{{ url_for('chairman.doc_import') }}">Import PDF/DOCX</a>
-      <a class="tab" href="{{ url_for('chairman.attempts') }}">Attempts</a>
-      <a class="tab" href="{{ url_for('chairman.export_attempts_csv') }}">Export Attempts</a>
-    {% endif %}
   </div>
-</div>
 {% endif %}
 
   <main class="container">
@@ -67,7 +58,7 @@
   </main>
 
   <footer class="footer">
-    <div class="container small">{{ brand.tagline }} — <span class="muted small">APP_VERSION=v5.2</span></div>
+    <div class="container small">{{ brand.tagline }} — <span class="muted small">APP_VERSION=v5.4</span></div>
   </footer>
 </body>
 </html>

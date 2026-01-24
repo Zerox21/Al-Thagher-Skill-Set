@@ -520,3 +520,117 @@ def media_upload():
     flash("Uploaded.", "ok")
     return redirect(url_for("chairman.media_library"))
 
+
+
+@bp.get("/question_import")
+@login_required
+def question_import():
+    if not _ensure_admin():
+        return redirect(url_for('auth.home'))
+    skills = Skill.query.filter_by(is_active=True).order_by(Skill.order_index.asc()).all()
+    return render_template("chairman_question_import.html", skills=skills)
+
+@bp.post("/question_import/upload")
+@login_required
+def question_import_upload():
+    if not _ensure_admin():
+        return redirect(url_for('auth.home'))
+
+    import io
+    import csv
+    import json
+    from openpyxl import load_workbook
+
+    f = request.files.get("file")
+    default_skill_id = int(request.form.get("default_skill_id") or "0") or None
+
+    if not f or not f.filename:
+        flash("Upload a CSV/XLSX file.", "error")
+        return redirect(url_for("chairman.question_import"))
+
+    name = f.filename.lower()
+    rows = []
+
+    if name.endswith(".csv"):
+        content = f.read().decode("utf-8-sig")
+        reader = csv.DictReader(io.StringIO(content))
+        rows = list(reader)
+    elif name.endswith(".xlsx"):
+        wb = load_workbook(f, data_only=True)
+        ws = wb.active
+        headers = [str(c.value).strip() if c.value is not None else "" for c in next(ws.iter_rows(min_row=1, max_row=1))]
+        for r in ws.iter_rows(min_row=2, values_only=True):
+            d = {headers[i]: (r[i] if i < len(r) else None) for i in range(len(headers))}
+            rows.append(d)
+    else:
+        flash("Only .csv or .xlsx supported.", "error")
+        return redirect(url_for("chairman.question_import"))
+
+    created = 0
+    skipped = 0
+
+    for row in rows:
+        skill_id = row.get("skill_id")
+        skill_name = row.get("skill_name")
+        qtype = (row.get("qtype") or "").strip()
+        prompt = (row.get("prompt") or "").strip()
+        if not prompt or not qtype:
+            skipped += 1
+            continue
+
+        sid = None
+        try:
+            sid = int(skill_id) if skill_id not in (None, "", "None") else None
+        except Exception:
+            sid = None
+        if sid is None and default_skill_id:
+            sid = default_skill_id
+        if sid is None and skill_name:
+            sk = Skill.query.filter_by(name=str(skill_name).strip()).first()
+            sid = sk.id if sk else None
+        if sid is None:
+            skipped += 1
+            continue
+
+        options_raw = (row.get("options") or "").strip()
+        options_json = None
+        if options_raw:
+            opts = [x.strip() for x in str(options_raw).split("|") if x.strip()]
+            options_json = json.dumps(opts, ensure_ascii=False)
+
+        ans_raw = row.get("answer")
+        answer_json = None
+        try:
+            if qtype == "mcq_multi":
+                answer_json = json.dumps([int(x.strip()) for x in str(ans_raw).split(",") if x.strip()], ensure_ascii=False)
+            elif qtype == "short_text":
+                answer_json = json.dumps(str(ans_raw or ""), ensure_ascii=False)
+            else:
+                answer_json = json.dumps(int(ans_raw), ensure_ascii=False) if ans_raw not in (None, "", "None") else None
+        except Exception:
+            answer_json = json.dumps(str(ans_raw or ""), ensure_ascii=False) if qtype == "short_text" else None
+
+        meta = (row.get("meta_json") or row.get("meta") or "")
+        meta_json = None
+        if meta not in (None, "", "None"):
+            m = str(meta).strip()
+            meta_json = m if (m.startswith("{") or m.startswith("[")) else json.dumps(m, ensure_ascii=False)
+
+        q = Question(
+            skill_id=sid,
+            qtype=qtype,
+            prompt=prompt,
+            options_json=options_json,
+            answer_json=answer_json,
+            meta_json=meta_json,
+            status="draft",
+            created_by_id=current_user.id,
+            created_by_role=current_user.role,
+        )
+        db.session.add(q)
+        created += 1
+
+    db.session.commit()
+    flash(f"Imported drafts. Created: {created}, Skipped: {skipped}. Approve when ready.", "ok")
+    return redirect(url_for("chairman.question_tool"))
+
