@@ -1,8 +1,8 @@
 {% extends "base.html" %}
 {% block content %}
 <div class="card">
-  <h1>Media Library</h1>
-  <p class="muted">Upload images/videos to use inside questions. (Teachers can also upload from Teacher Media.) Stored under STORAGE_DIR (persistent if you attach a disk).</p>
+  <h1>Chairman Media Library</h1>
+  <p class="muted">Upload images/videos to use inside questions. Copy the Meta snippet into Question Tool.</p>
 
   <h2>Upload</h2>
   <form method="post" action="{{ url_for('chairman.media_upload') }}" enctype="multipart/form-data" class="form">
@@ -16,15 +16,16 @@
       <thead><tr><th>File</th><th>Open</th><th>Meta snippet</th></tr></thead>
       <tbody>
         {% for f in files %}
+          {% set rel = "chairman/" ~ current_user.id ~ "/" ~ f %}
           <tr>
             <td><code>{{ f }}</code></td>
-            <td><a class="link" href="{{ url_for('files.media', relpath=f) }}" target="_blank">Open</a></td>
+            <td><a class="link" href="{{ url_for('files.media', relpath=rel) }}" target="_blank">Open</a></td>
             <td>
               {% set ext = f.rsplit('.',1)[-1].lower() %}
               {% if ext in ['png','jpg','jpeg','gif'] %}
-                <code>{"image_media":"{{ f }}"}</code>
+                <code>{"image_media":"{{ rel }}"}</code>
               {% else %}
-                <code>{"video_media":"{{ f }}","cues":[5,12]}</code>
+                <code>{"video_media":"{{ rel }}","cues":[5,12]}</code>
               {% endif %}
             </td>
           </tr>

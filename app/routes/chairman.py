@@ -476,3 +476,47 @@ def doc_import_post():
     db.session.commit()
     flash(f"Imported {created} draft questions from DOCX. Review and set type/options/answer, then approve.", "ok")
     return redirect(url_for("chairman.question_tool"))
+
+
+@bp.get("/media")
+@login_required
+def media_library():
+    if not _ensure_admin():
+        return redirect(url_for('auth.home'))
+
+    import os
+    from flask import current_app
+
+    media_dir = os.path.join(current_app.config["MEDIA_DIR"], "chairman", current_user.id)
+    os.makedirs(media_dir, exist_ok=True)
+    files = [n for n in sorted(os.listdir(media_dir)) if os.path.isfile(os.path.join(media_dir, n))]
+    return render_template("chairman_media.html", files=files)
+
+@bp.post("/media/upload")
+@login_required
+def media_upload():
+    if not _ensure_admin():
+        return redirect(url_for('auth.home'))
+
+    import os
+    from flask import current_app
+
+    f = request.files.get("file")
+    if not f or not f.filename:
+        flash("Select a file.", "error")
+        return redirect(url_for("chairman.media_library"))
+
+    ext = f.filename.rsplit(".", 1)[-1].lower() if "." in f.filename else ""
+    if ext not in current_app.config["MEDIA_ALLOWED_EXT"]:
+        flash("Media type not allowed.", "error")
+        return redirect(url_for("chairman.media_library"))
+
+    safe = "".join([c if c.isalnum() or c in "._-" else "_" for c in f.filename]).strip("_") or ("media." + ext)
+
+    media_dir = os.path.join(current_app.config["MEDIA_DIR"], "chairman", current_user.id)
+    os.makedirs(media_dir, exist_ok=True)
+    f.save(os.path.join(media_dir, safe))
+
+    flash("Uploaded.", "ok")
+    return redirect(url_for("chairman.media_library"))
+
