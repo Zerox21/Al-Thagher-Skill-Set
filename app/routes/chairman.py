@@ -2,7 +2,7 @@ from __future__ import annotations
 import csv, io
 from datetime import datetime
 from werkzeug.security import generate_password_hash
-from flask import Blueprint, render_template, redirect, url_for, flash, request
+from flask import Blueprint, render_template, redirect, url_for, flash, request, current_app
 from flask_login import login_required, current_user
 from .. import db
 from ..models import User, Skill, StudentSkill, Attempt, Question
@@ -634,3 +634,12 @@ def question_import_upload():
     flash(f"Imported drafts. Created: {created}, Skipped: {skipped}. Approve when ready.", "ok")
     return redirect(url_for("chairman.question_tool"))
 
+
+
+@bp.get("/debug/endpoints")
+@login_required
+def debug_endpoints():
+    if not _ensure_admin():
+        return redirect(url_for('auth.home'))
+    eps = sorted(list(current_app.view_functions.keys()))
+    return render_template("chairman_debug_endpoints.html", endpoints=eps)

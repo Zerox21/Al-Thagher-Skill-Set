@@ -16,9 +16,34 @@
         {% if current_user.is_authenticated %}
   <div class="toplinks">
     <div class="container toplinks-inner">
-      {% set vf = current_app.view_functions %}
       {% if current_user.role == 'student' %}
-        {% if 'student.dashboard' in vf %}<a class="tab" href="{{ url_for('student.dashboard') }}">Dashboard</a>{% endif %}
+        {% if has_endpoint('student.dashboard') %}<a class="tab" href="{{ url_for('student.dashboard') }}">Dashboard</a>{% endif %}
+      {% elif current_user.role == 'teacher' %}
+        {% if has_endpoint('teacher.dashboard') %}<a class="tab" href="{{ url_for('teacher.dashboard') }}">Dashboard</a>{% endif %}
+        {% if has_endpoint('teacher.question_tool') %}<a class="tab" href="{{ url_for('teacher.question_tool') }}">Questions</a>{% endif %}
+        {% if has_endpoint('teacher.media_library') %}<a class="tab" href="{{ url_for('teacher.media_library') }}">Media</a>{% endif %}
+        {% if has_endpoint('teacher.question_import') %}<a class="tab" href="{{ url_for('teacher.question_import') }}">Import Q</a>{% endif %}
+        {% if has_endpoint('teacher.doc_import') %}<a class="tab" href="{{ url_for('teacher.doc_import') }}">Import PDF/DOCX</a>{% endif %}
+        {% if has_endpoint('teacher.reports') %}<a class="tab" href="{{ url_for('teacher.reports') }}">Reports</a>{% endif %}
+        {% if has_endpoint('teacher.export_attempts_csv') %}<a class="tab" href="{{ url_for('teacher.export_attempts_csv') }}">Export Attempts</a>{% endif %}
+        {% if has_endpoint('teacher.export_students_csv') %}<a class="tab" href="{{ url_for('teacher.export_students_csv') }}">Export Students</a>{% endif %}
+      {% elif current_user.role == 'chairman' %}
+        {% if has_endpoint('chairman.dashboard') %}<a class="tab" href="{{ url_for('chairman.dashboard') }}">Dashboard</a>{% endif %}
+        {% if has_endpoint('chairman.users') %}<a class="tab" href="{{ url_for('chairman.users') }}">Users</a>{% endif %}
+        {% if has_endpoint('chairman.skills') %}<a class="tab" href="{{ url_for('chairman.skills') }}">Skills</a>{% endif %}
+        {% if has_endpoint('chairman.question_tool') %}<a class="tab" href="{{ url_for('chairman.question_tool') }}">Questions</a>{% endif %}
+        {% if has_endpoint('chairman.media_library') %}<a class="tab" href="{{ url_for('chairman.media_library') }}">Media</a>{% endif %}
+        {% if has_endpoint('chairman.question_import') %}<a class="tab" href="{{ url_for('chairman.question_import') }}">Import Q</a>{% endif %}
+        {% if has_endpoint('chairman.doc_import') %}<a class="tab" href="{{ url_for('chairman.doc_import') }}">Import PDF/DOCX</a>{% endif %}
+        {% if has_endpoint('chairman.attempts') %}<a class="tab" href="{{ url_for('chairman.attempts') }}">Attempts</a>{% endif %}
+        {% if has_endpoint('chairman.export_attempts_csv') %}<a class="tab" href="{{ url_for('chairman.export_attempts_csv') }}">Export Attempts</a>{% endif %}
+        {% if has_endpoint('chairman.export_students_csv') %}<a class="tab" href="{{ url_for('chairman.export_students_csv') }}">Export Students</a>{% endif %}
+        {% if has_endpoint('chairman.export_teachers_csv') %}<a class="tab" href="{{ url_for('chairman.export_teachers_csv') }}">Export Teachers</a>{% endif %}
+      {% endif %}
+    </div>
+  </div>
+{% endif %}
+
       {% elif current_user.role == 'teacher' %}
         {% if 'teacher.dashboard' in vf %}<a class="tab" href="{{ url_for('teacher.dashboard') }}">Dashboard</a>{% endif %}
         {% if 'teacher.question_tool' in vf %}<a class="tab" href="{{ url_for('teacher.question_tool') }}">Questions</a>{% endif %}
@@ -58,7 +83,7 @@
   </main>
 
   <footer class="footer">
-    <div class="container small">{{ brand.tagline }} — <span class="muted small">APP_VERSION=v5.4</span></div>
+    <div class="container small">{{ brand.tagline }} — <span class="muted small">APP_VERSION=v5.5</span></div>
   </footer>
 </body>
 </html>

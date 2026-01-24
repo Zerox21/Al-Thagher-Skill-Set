@@ -69,6 +69,13 @@ def create_app():
             }
         }
 
+    
+@app.context_processor
+def inject_helpers():
+    return {
+        "has_endpoint": lambda ep: ep in app.view_functions
+    }
+
     with app.app_context():
         db.create_all()
         from .migrate import ensure_schema

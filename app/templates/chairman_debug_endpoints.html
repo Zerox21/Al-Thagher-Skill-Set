@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <h1>Registered endpoints</h1>
+  <p class="muted">If something is missing here, it means the route isn't registered in this deploy.</p>
+  <ul class="list">
+    {% for e in endpoints %}
+      <li><code>{{ e }}</code></li>
+    {% endfor %}
+  </ul>
+</div>
+{% endblock %}
