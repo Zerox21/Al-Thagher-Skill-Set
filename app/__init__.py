@@ -8,13 +8,22 @@ db = SQLAlchemy()
 login_manager = LoginManager()
 login_manager.login_view = "auth.login"
 
+
 def create_app():
     app = Flask(__name__)
 
-    os.makedirs(os.path.join(app.root_path, '..', 'instance'), exist_ok=True)
+    # Ensure instance folder exists (needed for SQLite + local storage)
+    os.makedirs(os.path.join(app.root_path, "..", "instance"), exist_ok=True)
+
     app.config.from_object(Config)
 
-    for p in [app.config.get('STORAGE_DIR'), app.config.get('REPORTS_DIR'), app.config.get('UPLOADS_DIR'), app.config.get('MEDIA_DIR')]:
+    # Ensure storage folders exist
+    for p in [
+        app.config.get("STORAGE_DIR"),
+        app.config.get("REPORTS_DIR"),
+        app.config.get("UPLOADS_DIR"),
+        app.config.get("MEDIA_DIR"),
+    ]:
         if p:
             os.makedirs(p, exist_ok=True)
 
@@ -27,6 +36,7 @@ def create_app():
     def load_user(user_id: str):
         return User.query.get(user_id)
 
+    # Jinja helpers
     from .filters import bp as filters_bp
     app.register_blueprint(filters_bp)
 
@@ -42,6 +52,7 @@ def create_app():
     app.register_blueprint(chairman_bp, url_prefix="/chairman")
     app.register_blueprint(files_bp, url_prefix="/files")
 
+    # Branding for templates
     @app.context_processor
     def inject_brand():
         return {
@@ -54,12 +65,15 @@ def create_app():
             }
         }
 
+    # Safe helper for top tabs (avoid crashing when endpoint missing)
     @app.context_processor
     def inject_helpers():
         return {"has_endpoint": lambda ep: ep in app.view_functions}
 
     with app.app_context():
         db.create_all()
+
+        # Optional: migrations (won't crash if missing)
         try:
             from .migrate import ensure_schema
             ensure_schema()
