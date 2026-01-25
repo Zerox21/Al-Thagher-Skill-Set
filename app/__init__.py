@@ -1,6 +1,5 @@
-import os
-
 from flask import Flask
+import os
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager
 from .config import Config
@@ -19,19 +18,6 @@ def create_app():
         if p:
             os.makedirs(p, exist_ok=True)
 
-    # Ensure folders exist (SQLite + persistent storage)
-    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-    os.makedirs(os.path.join(project_root, "instance"), exist_ok=True)
-
-    for p in [
-        app.config.get("STORAGE_DIR"),
-        app.config.get("REPORTS_DIR"),
-        app.config.get("UPLOADS_DIR"),
-        app.config.get("MEDIA_DIR"),
-    ]:
-        if p:
-            os.makedirs(p, exist_ok=True)
-
     db.init_app(app)
     login_manager.init_app(app)
 
@@ -41,7 +27,6 @@ def create_app():
     def load_user(user_id: str):
         return User.query.get(user_id)
 
-    # Jinja helpers
     from .filters import bp as filters_bp
     app.register_blueprint(filters_bp)
 
@@ -60,26 +45,27 @@ def create_app():
     @app.context_processor
     def inject_brand():
         return {
-            'brand': {
-                'name': app.config.get('BRAND_NAME'),
-                'tagline': app.config.get('BRAND_TAGLINE'),
-                'primary_color': app.config.get('BRAND_PRIMARY_COLOR'),
-                'logo_path': app.config.get('BRAND_LOGO_PATH'),
-                'favicon_path': app.config.get('BRAND_FAVICON_PATH'),
+            "brand": {
+                "name": app.config.get("BRAND_NAME"),
+                "tagline": app.config.get("BRAND_TAGLINE"),
+                "primary_color": app.config.get("BRAND_PRIMARY_COLOR"),
+                "logo_path": app.config.get("BRAND_LOGO_PATH"),
+                "favicon_path": app.config.get("BRAND_FAVICON_PATH"),
             }
         }
 
-    
-@app.context_processor
-def inject_helpers():
-    return {
-        "has_endpoint": lambda ep: ep in app.view_functions
-    }
+    @app.context_processor
+    def inject_helpers():
+        return {"has_endpoint": lambda ep: ep in app.view_functions}
 
     with app.app_context():
         db.create_all()
-        from .migrate import ensure_schema
-        ensure_schema()
+        try:
+            from .migrate import ensure_schema
+            ensure_schema()
+        except Exception:
+            pass
+
         from .seed import ensure_seed_data
         ensure_seed_data()
 
