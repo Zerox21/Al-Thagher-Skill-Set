@@ -3,20 +3,30 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{{ title or brand.name }}</title>
-  <link rel="icon" href="{{ brand.favicon_path }}">
-  <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}">
-  <style>:root{--primary: {{ brand.primary_color }};}</style>
-</head>
+  {% set brand_name = brand.name if brand is defined and brand.name else 'App' %}
+  {% set brand_tagline = brand.tagline if brand is defined and brand.tagline else '' %}
+  {% set brand_logo = brand.logo_path if brand is defined and brand.logo_path else '' %}
+  {% set brand_favicon = brand.favicon_path if brand is defined and brand.favicon_path else '' %}
+  {% set brand_primary = brand.primary_color if brand is defined and brand.primary_color else '' %}
 
+  <title>{{ title or brand_name }}</title>
+  {% if brand_favicon %}
+    <link rel="icon" href="{{ brand_favicon }}">
+  {% endif %}
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}">
+  {% if brand_primary %}
+    <style>:root{--primary: {{ brand_primary }};}</style>
+  {% endif %}
+</head>
 <body>
   <header class="top">
     <div class="container top-inner">
       <div class="brand">
-        <img class="brand-logo" src="{{ brand.logo_path }}" alt="logo" onerror="this.style.display='none'">
-        <span class="brand-text">{{ brand.name }}</span>
+        {% if brand_logo %}
+          <img class="brand-logo" src="{{ brand_logo }}" alt="logo" onerror="this.style.display='none'">
+        {% endif %}
+        <span class="brand-text">{{ brand_name }}</span>
       </div>
-
       <nav class="nav">
         {% if current_user.is_authenticated %}
           <span class="pill">{{ current_user.role }}: {{ current_user.name }} ({{ current_user.id }})</span>
@@ -29,21 +39,18 @@
   </header>
 
   {% if current_user.is_authenticated %}
-  <div class="toplinks">
-    <div class="container toplinks-inner">
-      <!-- Always safe link -->
-      <a class="tab" href="{{ url_for('auth.home') }}">Home</a>
-
-      <!-- Role label only (no risky endpoints here so it never crashes) -->
-      {% if current_user.role == 'student' %}
-        <span class="muted small">Student Panel</span>
-      {% elif current_user.role == 'teacher' %}
-        <span class="muted small">Teacher Panel</span>
-      {% elif current_user.role == 'chairman' %}
-        <span class="muted small">Chairman Panel</span>
-      {% endif %}
+    <div class="toplinks">
+      <div class="container toplinks-inner">
+        <a class="tab" href="{{ url_for('auth.home') }}">Home</a>
+        {% if current_user.role == 'student' %}
+          <span class="muted small">Student Panel</span>
+        {% elif current_user.role == 'teacher' %}
+          <span class="muted small">Teacher Panel</span>
+        {% elif current_user.role == 'chairman' %}
+          <span class="muted small">Chairman Panel</span>
+        {% endif %}
+      </div>
     </div>
-  </div>
   {% endif %}
 
   <main class="container">
@@ -62,7 +69,10 @@
 
   <footer class="footer">
     <div class="container small">
-      {{ brand.tagline }} — <span class="muted small">APP_VERSION=basefix-1</span>
+      {% if brand_tagline %}
+        {{ brand_tagline }} —
+      {% endif %}
+      <span class="muted small">APP_VERSION=basefix-1</span>
     </div>
   </footer>
 </body>
