@@ -1,8 +1,3 @@
- (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
-diff --git a/app/config.py b/app/config.py
-index ce0a2c4dc98c3858c082d6583c9ee8e66533cb11..182a972306bdd7eaf4d4ee4b135db98fbaa4514c 100644
---- a/app/config.py
-+++ b/app/config.py
 @@ -13,44 +13,47 @@ def normalize_database_url(url: str | None) -> str | None:
  def _default_storage_dir():
      return os.environ.get("STORAGE_DIR", os.path.join(BASE_DIR, "..", "instance", "storage"))
@@ -51,6 +46,3 @@ index ce0a2c4dc98c3858c082d6583c9ee8e66533cb11..182a972306bdd7eaf4d4ee4b135db98f
      SMTP_TLS = os.environ.get("SMTP_TLS", "1") == "1"
  
      PERMANENT_SESSION_LIFETIME = timedelta(hours=8)
- 
-EOF
-)
