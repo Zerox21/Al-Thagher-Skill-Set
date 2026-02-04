@@ -1,4 +1,3 @@
- (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
 diff --git a/README.md b/README.md
 index 725792545444c3198c306459cfe2900cf7a30017..734e4c06aa5e605229dad0248c67fb2d172a1436 100644
 --- a/README.md
@@ -128,6 +127,3 @@ index 725792545444c3198c306459cfe2900cf7a30017..734e4c06aa5e605229dad0248c67fb2d
 +- Better math rendering (MathJax/KaTeX)
 +- S3 storage for media/reports
 +- Audit logs and role permissions matrix
- 
-EOF
-)
