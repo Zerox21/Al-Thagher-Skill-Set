@@ -1,9 +1,3 @@
- (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
-diff --git a/app/templates/base.html b/app/templates/base.html
-index ce6e2d40943ab57496db7d2f4b5bb1d7bdf70af1..cdd5f64824de089a4f6b036bd8f8c8879d7dd39d 100644
---- a/app/templates/base.html
-+++ b/app/templates/base.html
-@@ -1,44 +1,92 @@
  <!doctype html>
 -<html lang="en">
 +<html lang="{{ app_locale or 'ar' }}" dir="{{ app_text_dir or 'rtl' }}">
@@ -102,6 +96,3 @@ index ce6e2d40943ab57496db7d2f4b5bb1d7bdf70af1..cdd5f64824de089a4f6b036bd8f8c887
    </footer>
  </body>
  </html>
- 
-EOF
-)
