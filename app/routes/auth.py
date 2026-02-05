@@ -1,64 +1,51 @@
 from flask import Blueprint, render_template, request, redirect, url_for, flash
 from flask_login import login_user, logout_user, login_required, current_user
-from ..models import User
-from .. import db
+from app.models import User
 
 bp = Blueprint("auth", __name__)
 
 @bp.get("/")
-def home():
+def index():
     if current_user.is_authenticated:
-        if current_user.role == "student":
-            return redirect(url_for("student.dashboard"))
-        if current_user.role == "teacher":
-            return redirect(url_for("teacher.dashboard"))
-        if current_user.role == "chairman":
-            return redirect(url_for("chairman.dashboard"))
+        return redirect(url_for("auth.home"))
     return redirect(url_for("auth.login"))
 
-@bp.route("/login", methods=["GET", "POST"])
-def login():
-    teachers = User.query.filter_by(role="teacher").order_by(User.name.asc()).all()
-
-    if request.method == "POST":
-        role = request.form.get("role")
-        user_id = (request.form.get("user_id") or "").strip()
-        pin = (request.form.get("pin") or "").strip()
-        teacher_id = request.form.get("teacher_id")
-
-        if role not in {"student","teacher","chairman"}:
-            flash("Invalid role.", "error")
-            return render_template("login.html", teachers=teachers)
-
-        user = User.query.filter_by(id=user_id, role=role).first()
-        if not user:
-            flash("Access denied: ID not found for this role.", "error")
-            return render_template("login.html", teachers=teachers)
-
-        if not user.check_pin(pin):
-            flash("Wrong PIN.", "error")
-            return render_template("login.html", teachers=teachers)
-
-        if role == "student":
-            if not teacher_id:
-                flash("Select your teacher.", "error")
-                return render_template("login.html", teachers=teachers)
-            teacher = User.query.filter_by(id=teacher_id, role="teacher").first()
-            if not teacher:
-                flash("Teacher not found.", "error")
-                return render_template("login.html", teachers=teachers)
-            user.teacher_id = teacher.id
-            db.session.commit()
-
-        login_user(user)
-
-        if role == "student":
-            return redirect(url_for("student.dashboard"))
-        if role == "teacher":
-            return redirect(url_for("teacher.dashboard"))
+@bp.get("/home")
+@login_required
+def home():
+    if current_user.role == "chairman":
         return redirect(url_for("chairman.dashboard"))
+    if current_user.role == "teacher":
+        return redirect(url_for("teacher.dashboard"))
+    return redirect(url_for("student.dashboard"))
 
-    return render_template("login.html", teachers=teachers)
+@bp.route("/login", methods=["GET","POST"])
+def login():
+    if request.method == "GET":
+        teachers = User.query.filter_by(role="teacher").all()
+        return render_template("login.html", teachers=teachers)
+
+    role = request.form.get("role", "")
+    if role == "student":
+        sid = (request.form.get("student_id") or "").strip()
+        pw = request.form.get("password") or ""
+        user = User.query.filter_by(role="student", student_id=sid).first()
+        if not user or not user.check_password(pw):
+            flash("بيانات الدخول غير صحيحة.", "danger")
+            return redirect(url_for("auth.login"))
+        login_user(user)
+        if not user.teacher_id:
+            return redirect(url_for("student.select_teacher"))
+        return redirect(url_for("student.dashboard"))
+
+    username = (request.form.get("username") or "").strip()
+    pw = request.form.get("password") or ""
+    user = User.query.filter_by(username=username).first()
+    if not user or user.role not in ("chairman","teacher") or not user.check_password(pw):
+        flash("بيانات الدخول غير صحيحة.", "danger")
+        return redirect(url_for("auth.login"))
+    login_user(user)
+    return redirect(url_for("auth.home"))
 
 @bp.get("/logout")
 @login_required

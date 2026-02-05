@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block content %}
+<h1 class="h1">{{ t('questions') }}</h1>
+
+<div class="card">
+  <form method="get">
+    <label>اختر مهارة</label>
+    <select name="skill_id" onchange="this.form.submit()">
+      <option value="">-- اختر --</option>
+      {% for s in skills %}
+        <option value="{{ s.id }}" {% if skill_id==s.id %}selected{% endif %}>{{ s.name_ar }}</option>
+      {% endfor %}
+    </select>
+  </form>
+</div>
+
+<div class="card">
+  <a class="btn" href="{{ url_for('teacher.question_new') }}">إضافة سؤال جديد</a>
+</div>
+
+{% if questions %}
+  <div class="card">
+    <table class="table">
+      <tr><th>ID</th><th>النوع</th><th>النص</th><th></th></tr>
+      {% for q in questions %}
+        <tr>
+          <td>{{ q.id }}</td>
+          <td>{{ q.qtype }}</td>
+          <td>{{ q.prompt_ar[:120] }}</td>
+          <td>
+            <a class="btn small ghost" href="{{ url_for('teacher.question_edit', question_id=q.id) }}">تعديل</a>
+            <form method="post" action="{{ url_for('teacher.question_delete', question_id=q.id) }}" style="display:inline">
+              <button class="btn small" type="submit" onclick="return confirm('حذف السؤال؟')">حذف</button>
+            </form>
+          </td>
+        </tr>
+      {% endfor %}
+    </table>
+  </div>
+{% endif %}
+{% endblock %}

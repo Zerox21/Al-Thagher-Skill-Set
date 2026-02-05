@@ -1,0 +1,83 @@
+{% extends "base.html" %}
+{% block content %}
+<h1 class="h1">اختبار: {{ skill.name_ar }}</h1>
+
+<div class="card">
+  <div class="row space-between">
+    <div class="muted">الحد الزمني: {{ skill.time_limit_min }} دقيقة</div>
+    <div class="timer">{{ t('time_left') }}: <span id="timeLeft">--:--</span></div>
+  </div>
+</div>
+
+<form method="post" action="{{ url_for('student.submit', attempt_id=attempt.id) }}">
+  {% for q in questions %}
+    <div class="card">
+      <div class="q-title">سؤال {{ loop.index }}</div>
+      <div class="q-prompt">{{ q.prompt_ar|safe }}</div>
+
+      {% if q.qtype == 'video_checkpoint' %}
+        <video id="vid{{ q.id }}" controls style="max-width:100%; margin-top:10px;">
+          <source src="{{ (q.media_json or {}).get('video_url','') }}" type="video/mp4">
+        </video>
+        <div class="muted small">لن تظهر الإجابة قبل الوصول للثانية {{ (q.meta_json or {}).get('checkpoint_seconds',0) }}.</div>
+      {% endif %}
+
+      {% if q.qtype in ['mcq_single','tf','video_checkpoint'] %}
+        {% set disabled = (q.qtype=='video_checkpoint') %}
+        {% for ch in (q.options_json or {}).get('choices',[]) %}
+          <label class="opt">
+            <input type="radio" name="q_{{ q.id }}" value="{{ ch.id }}" {% if disabled %}disabled data-vqid="{{ q.id }}"{% endif %}>
+            <span>{{ ch.text_ar }}</span>
+          </label>
+        {% endfor %}
+      {% elif q.qtype == 'mcq_multi' %}
+        {% for ch in (q.options_json or {}).get('choices',[]) %}
+          <label class="opt">
+            <input type="checkbox" name="q_{{ q.id }}" value="{{ ch.id }}">
+            <span>{{ ch.text_ar }}</span>
+          </label>
+        {% endfor %}
+      {% elif q.qtype == 'short' %}
+        <textarea name="q_{{ q.id }}" rows="3"></textarea>
+      {% elif q.qtype == 'numeric' %}
+        <input name="q_{{ q.id }}" type="number" step="any">
+      {% endif %}
+    </div>
+  {% endfor %}
+
+  <button class="btn" type="submit">{{ t('submit_test') }}</button>
+</form>
+
+<script>
+  const startedAt = new Date("{{ attempt.started_at.isoformat() }}Z").getTime();
+  const limitSec = {{ (skill.time_limit_min or 10) * 60 }};
+  function tick(){
+    const now = Date.now();
+    const elapsed = Math.floor((now - startedAt)/1000);
+    let left = Math.max(0, limitSec - elapsed);
+    const mm = String(Math.floor(left/60)).padStart(2,'0');
+    const ss = String(left%60).padStart(2,'0');
+    document.getElementById('timeLeft').textContent = mm+":"+ss;
+    if(left<=0){
+      document.querySelector('form').submit();
+    }
+  }
+  setInterval(tick, 1000); tick();
+
+  {% for q in questions %}
+    {% if q.qtype == 'video_checkpoint' %}
+      (function(){
+        const vid = document.getElementById("vid{{ q.id }}");
+        const checkpoint = {{ (q.meta_json or {}).get('checkpoint_seconds',0) }};
+        const inputs = document.querySelectorAll('input[data-vqid="{{ q.id }}"]');
+        function update(){
+          if(vid.currentTime >= checkpoint){
+            inputs.forEach(i => i.disabled = false);
+          }
+        }
+        vid.addEventListener('timeupdate', update);
+      })();
+    {% endif %}
+  {% endfor %}
+</script>
+{% endblock %}

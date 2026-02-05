@@ -1,577 +1,267 @@
-from __future__ import annotations
-import os, json
-from datetime import datetime
-from flask import Blueprint, render_template, redirect, url_for, flash, request, current_app
+from flask import Blueprint, render_template, request, redirect, url_for, flash, abort
 from flask_login import login_required, current_user
-from .. import db
-from ..models import User, Skill, StudentSkill, Attempt, RemediationUpload, Question
-from ..utils import safe_filename
+from app import db
+from app.models import User, Skill, StudentSkillStatus, Remediation, Media, Report, Question
+from app.storage import save_upload
+from app.utils import iso_week_key, ensure_allowed_ext
 
 bp = Blueprint("teacher", __name__)
 
-def _ensure_teacher():
+ALLOWED_MEDIA_EXT = {".png",".jpg",".jpeg",".gif",".webp",".mp4",".webm",".pdf",".docx",".ppt",".pptx"}
+ALLOWED_REMEDIATION_EXT = {".png",".jpg",".jpeg",".gif",".webp",".mp4",".webm",".pdf",".docx",".ppt",".pptx",".xls",".xlsx",".zip"}
+
+def _require_teacher():
     if current_user.role != "teacher":
-        flash("Teacher access only.", "error")
-        return False
-    return True
-
-
-def _can_unlock_skill_for_student(student_id: str, skill_id: int) -> tuple[bool, str]:
-    """To unlock a skill, previous skill must be PASS, or remediation uploaded after last FAIL."""
-    skill = Skill.query.get(skill_id)
-    if not skill:
-        return False, "Skill not found."
-
-    prev = Skill.query.filter(Skill.is_active.is_(True), Skill.order_index == (skill.order_index - 1)).first()
-    if not prev:
-        return True, ""
-
-    prev_attempt = Attempt.query.filter_by(student_id=student_id, skill_id=prev.id).filter(Attempt.finished_at.isnot(None)).order_by(Attempt.finished_at.desc()).first()
-    if not prev_attempt:
-        return False, f"Cannot unlock: student hasn't attempted previous skill ({prev.name}) yet."
-
-    if prev_attempt.passed:
-        return True, ""
-
-    rem = RemediationUpload.query.filter_by(teacher_id=current_user.id, student_id=student_id, skill_id=prev.id).order_by(RemediationUpload.uploaded_at.desc()).first()
-    if rem and rem.uploaded_at and prev_attempt.finished_at and rem.uploaded_at > prev_attempt.finished_at:
-        return True, ""
-
-    return False, f"Cannot unlock next skill: previous skill ({prev.name}) is FAIL. Upload remediation for that skill first."
-
+        abort(403)
 
 @bp.get("/dashboard")
 @login_required
 def dashboard():
-    if not _ensure_teacher():
-        return redirect(url_for('auth.home'))
+    _require_teacher()
+    students = User.query.filter_by(role="student", teacher_id=current_user.id).all()
+    skills = Skill.query.order_by(Skill.order.asc()).all()
+    reports = Report.query.filter_by(teacher_id=current_user.id).order_by(Report.created_at.desc()).all()
+    return render_template("teacher_dashboard.html", students=students, skills=skills, reports=reports)
 
-    students = User.query.filter_by(role="student", teacher_id=current_user.id).order_by(User.name.asc()).all()
-    skills = Skill.query.filter_by(is_active=True).order_by(Skill.order_index.asc()).all()
-    attempts = Attempt.query.filter_by(teacher_id=current_user.id).filter(Attempt.finished_at.isnot(None)).all()
-    avg_score = round(100 * (sum([a.score or 0 for a in attempts]) / len(attempts)), 2) if attempts else 0.0
-
-    student_rows = []
-    for s in students:
-        s_attempts = [a for a in attempts if a.student_id == s.id]
-        student_rows.append({
-            "student": s,
-            "attempts": len(s_attempts),
-            "avg": round(100 * (sum([a.score or 0 for a in s_attempts]) / len(s_attempts)), 1) if s_attempts else 0
-        })
-    return render_template("teacher_dashboard.html", students=students, skills=skills, avg_score=avg_score, student_rows=student_rows)
-
-@bp.get("/students/<student_id>")
+@bp.get("/skills")
 @login_required
-def student_detail(student_id: str):
-    if not _ensure_teacher():
-        return redirect(url_for('auth.home'))
+def skills():
+    _require_teacher()
+    skills = Skill.query.order_by(Skill.order.asc()).all()
+    return render_template("teacher_skills.html", skills=skills)
 
-    student = User.query.filter_by(id=student_id, role="student", teacher_id=current_user.id).first()
-    if not student:
-        flash("Student not found.", "error")
-        return redirect(url_for("teacher.dashboard"))
-
-    skills = Skill.query.filter_by(is_active=True).order_by(Skill.order_index.asc()).all()
-    perms = {p.skill_id: p for p in StudentSkill.query.filter_by(student_id=student.id).all()}
-    attempts = Attempt.query.filter_by(student_id=student.id, teacher_id=current_user.id).order_by(Attempt.started_at.desc()).all()
-    rem_files = RemediationUpload.query.filter_by(student_id=student.id, teacher_id=current_user.id).order_by(RemediationUpload.uploaded_at.desc()).all()
-    return render_template("teacher_student.html", student=student, skills=skills, perms=perms, attempts=attempts, rem_files=rem_files)
-
-@bp.post("/students/<student_id>/toggle_skill")
+@bp.post("/skills")
 @login_required
-def toggle_skill(student_id: str):
-    if not _ensure_teacher():
-        return redirect(url_for('auth.home'))
+def skill_create():
+    _require_teacher()
+    name_ar = request.form.get("name_ar") or ""
+    desc = request.form.get("description_ar") or ""
+    order = int(request.form.get("order") or 0)
+    pass_th = int(request.form.get("pass_threshold") or 60)
+    tl = int(request.form.get("time_limit_min") or 10)
+    s = Skill(name_ar=name_ar, description_ar=desc, order=order, pass_threshold=pass_th, time_limit_min=tl)
+    db.session.add(s)
+    db.session.commit()
+    flash("تم إضافة المهارة.", "success")
+    return redirect(url_for("teacher.skills"))
 
-    student = User.query.filter_by(id=student_id, role="student", teacher_id=current_user.id).first()
-    if not student:
-        flash("Student not found.", "error")
-        return redirect(url_for("teacher.dashboard"))
+@bp.route("/skills/<int:skill_id>/edit", methods=["GET","POST"])
+@login_required
+def skill_edit(skill_id: int):
+    _require_teacher()
+    s = Skill.query.get_or_404(skill_id)
+    if request.method == "GET":
+        return render_template("skill_form.html", skill=s, action=url_for("teacher.skill_edit", skill_id=s.id))
+    s.name_ar = request.form.get("name_ar") or s.name_ar
+    s.description_ar = request.form.get("description_ar") or s.description_ar
+    s.order = int(request.form.get("order") or s.order or 0)
+    s.pass_threshold = int(request.form.get("pass_threshold") or s.pass_threshold or 60)
+    s.time_limit_min = int(request.form.get("time_limit_min") or s.time_limit_min or 10)
+    db.session.commit()
+    flash("تم تحديث المهارة.", "success")
+    return redirect(url_for("teacher.skills"))
 
-    skill_id = int(request.form.get("skill_id"))
-    allowed = (request.form.get("allowed") == "1")
+@bp.post("/skills/<int:skill_id>/delete")
+@login_required
+def skill_delete(skill_id: int):
+    _require_teacher()
+    # delete dependents to avoid FK issues in Postgres
+    from app.models import Attempt, Report, Remediation, ImportBatch, ImportItem, StudentSkillStatus
+    Question.query.filter_by(skill_id=skill_id).delete(synchronize_session=False)
 
-    if allowed:
-        ok, msg = _can_unlock_skill_for_student(student.id, skill_id)
-        if not ok:
-            flash(msg, "error")
-            return redirect(url_for("teacher.student_detail", student_id=student.id))
+    attempt_ids = [a.id for a in Attempt.query.filter_by(skill_id=skill_id).all()]
+    if attempt_ids:
+        Report.query.filter(Report.attempt_id.in_(attempt_ids)).delete(synchronize_session=False)
+    Attempt.query.filter_by(skill_id=skill_id).delete(synchronize_session=False)
+    Remediation.query.filter_by(skill_id=skill_id).delete(synchronize_session=False)
+    StudentSkillStatus.query.filter_by(skill_id=skill_id).delete(synchronize_session=False)
 
-    perm = StudentSkill.query.filter_by(student_id=student.id, skill_id=skill_id).first()
-    if not perm:
-        perm = StudentSkill(student_id=student.id, skill_id=skill_id, allowed=allowed, unlocked_at=datetime.utcnow() if allowed else None)
-        db.session.add(perm)
+    batch_ids = [b.id for b in ImportBatch.query.filter_by(skill_id=skill_id).all()]
+    if batch_ids:
+        ImportItem.query.filter(ImportItem.batch_id.in_(batch_ids)).delete(synchronize_session=False)
+    ImportBatch.query.filter_by(skill_id=skill_id).delete(synchronize_session=False)
+
+    s = Skill.query.get_or_404(skill_id)
+    db.session.delete(s)
+    db.session.commit()
+    flash("تم حذف المهارة.", "success")
+    return redirect(url_for("teacher.skills"))
+
+@bp.post("/student/<int:student_id>/unlock")
+@login_required
+def unlock_skill(student_id: int):
+    _require_teacher()
+    student = User.query.filter_by(id=student_id, role="student", teacher_id=current_user.id).first_or_404()
+    skill_id = int(request.form.get("skill_id") or 0)
+    status = StudentSkillStatus.query.filter_by(student_id=student.id, skill_id=skill_id).first()
+    if not status:
+        status = StudentSkillStatus(student_id=student.id, skill_id=skill_id, unlocked=True)
+        db.session.add(status)
     else:
-        perm.allowed = allowed
-        if allowed and perm.unlocked_at is None:
-            perm.unlocked_at = datetime.utcnow()
+        status.unlocked = True
     db.session.commit()
+    flash("تم فتح المهارة للطالب.", "success")
+    return redirect(url_for("teacher.dashboard"))
 
-    flash("Updated skill permission.", "ok")
-    return redirect(url_for("teacher.student_detail", student_id=student.id))
-
-@bp.post("/students/<student_id>/upload_remediation")
+@bp.post("/student/<int:student_id>/lock")
 @login_required
-def upload_remediation(student_id: str):
-    if not _ensure_teacher():
-        return redirect(url_for('auth.home'))
+def lock_skill(student_id: int):
+    _require_teacher()
+    student = User.query.filter_by(id=student_id, role="student", teacher_id=current_user.id).first_or_404()
+    skill_id = int(request.form.get("skill_id") or 0)
+    status = StudentSkillStatus.query.filter_by(student_id=student.id, skill_id=skill_id).first()
+    if status:
+        status.unlocked = False
+        db.session.commit()
+    flash("تم قفل المهارة.", "success")
+    return redirect(url_for("teacher.dashboard"))
+
+@bp.post("/student/<int:student_id>/allow-extra-attempt")
+@login_required
+def allow_extra_attempt(student_id: int):
+    _require_teacher()
+    student = User.query.filter_by(id=student_id, role="student", teacher_id=current_user.id).first_or_404()
+    skill_id = int(request.form.get("skill_id") or 0)
+    wk = iso_week_key()
+    status = StudentSkillStatus.query.filter_by(student_id=student.id, skill_id=skill_id).first()
+    if not status:
+        status = StudentSkillStatus(student_id=student.id, skill_id=skill_id, unlocked=True, extra_attempt_week=wk)
+        db.session.add(status)
+    else:
+        status.extra_attempt_week = wk
+    db.session.commit()
+    flash("تم السماح بمحاولة إضافية لهذا الأسبوع.", "success")
+    return redirect(url_for("teacher.dashboard"))
+
+@bp.get("/remediation")
+@login_required
+def remediation_page():
+    _require_teacher()
+    students = User.query.filter_by(role="student", teacher_id=current_user.id).all()
+    skills = Skill.query.order_by(Skill.order.asc()).all()
+    rems = Remediation.query.filter_by(teacher_id=current_user.id).order_by(Remediation.created_at.desc()).all()
+    return render_template("teacher_remediation.html", students=students, skills=skills, remediations=rems)
+
+@bp.post("/remediation")
+@login_required
+def remediation_post():
+    _require_teacher()
+    student_id = int(request.form.get("student_id") or 0)
+    skill_id = int(request.form.get("skill_id") or 0)
+    notes = request.form.get("notes_ar") or ""
+    file = request.files.get("file")
+    if not file:
+        flash("الرجاء اختيار ملف.", "danger")
+        return redirect(url_for("teacher.remediation_page"))
+    if not ensure_allowed_ext(file.filename or "", ALLOWED_REMEDIATION_EXT):
+        flash("امتداد الملف غير مسموح.", "danger")
+        return redirect(url_for("teacher.remediation_page"))
 
     student = User.query.filter_by(id=student_id, role="student", teacher_id=current_user.id).first()
     if not student:
-        flash("Student not found.", "error")
-        return redirect(url_for("teacher.dashboard"))
+        flash("طالب غير صحيح.", "danger")
+        return redirect(url_for("teacher.remediation_page"))
 
-    skill_id = int(request.form.get("skill_id"))
-    note = (request.form.get("note") or "").strip()
-
-    f = request.files.get("file")
-    if not f or not f.filename:
-        flash("Select a file.", "error")
-        return redirect(url_for("teacher.student_detail", student_id=student.id))
-
-    ext = f.filename.rsplit(".", 1)[-1].lower() if "." in f.filename else ""
-    if ext not in current_app.config["ALLOWED_UPLOAD_EXT"]:
-        flash("File type not allowed.", "error")
-        return redirect(url_for("teacher.student_detail", student_id=student.id))
-
-    safe = safe_filename(f.filename)
-    stored_dir = os.path.join(current_app.config['UPLOADS_DIR'], 'teacher', current_user.id, student.id, str(skill_id))
-    os.makedirs(stored_dir, exist_ok=True)
-    stored_path = os.path.join(stored_dir, safe)
-    f.save(stored_path)
-
-    rel = os.path.relpath(stored_path, current_app.config['UPLOADS_DIR'])
-    up = RemediationUpload(
-        teacher_id=current_user.id,
-        student_id=student.id,
-        skill_id=skill_id,
-        filename=safe,
-        stored_path=rel,
-        note=note or None
-    )
-    db.session.add(up)
+    saved = save_upload(file, "remediation")
+    m = Media(filename=saved["filename"], mime=saved["mime"], url="", storage_key=saved["storage_key"], uploaded_by=current_user.id)
+    db.session.add(m)
+    db.session.commit()
+    m.url = f"/media/file/{m.id}"
     db.session.commit()
 
-    flash("Uploaded successfully.", "ok")
-    return redirect(url_for("teacher.student_detail", student_id=student.id))
-
-
-@bp.get("/media")
-@login_required
-def media_library():
-    if not _ensure_teacher():
-        return redirect(url_for('auth.home'))
-    import os
-    from flask import current_app
-    media_dir = os.path.join(current_app.config["MEDIA_DIR"], "teacher", current_user.id)
-    os.makedirs(media_dir, exist_ok=True)
-    files = [n for n in sorted(os.listdir(media_dir)) if os.path.isfile(os.path.join(media_dir, n))]
-    return render_template("teacher_media.html", files=files)
-
-@bp.post("/media/upload")
-@login_required
-def media_upload():
-    if not _ensure_teacher():
-        return redirect(url_for('auth.home'))
-    import os
-    from flask import current_app
-    f = request.files.get("file")
-    if not f or not f.filename:
-        flash("Select a file.", "error")
-        return redirect(url_for("teacher.media_library"))
-    ext = f.filename.rsplit(".",1)[-1].lower() if "." in f.filename else ""
-    if ext not in current_app.config["MEDIA_ALLOWED_EXT"]:
-        flash("Media type not allowed.", "error")
-        return redirect(url_for("teacher.media_library"))
-
-    safe = "".join([c if c.isalnum() or c in "._-" else "_" for c in f.filename]).strip("_") or ("media."+ext)
-    media_dir = os.path.join(current_app.config["MEDIA_DIR"], "teacher", current_user.id)
-    os.makedirs(media_dir, exist_ok=True)
-    f.save(os.path.join(media_dir, safe))
-
-    flash("Uploaded.", "ok")
-    return redirect(url_for("teacher.media_library"))
+    rem = Remediation(teacher_id=current_user.id, student_id=student.id, skill_id=skill_id, notes_ar=notes, file_media_id=m.id)
+    db.session.add(rem)
+    db.session.commit()
+    flash("تم رفع الخطة العلاجية.", "success")
+    return redirect(url_for("teacher.remediation_page"))
 
 @bp.get("/reports")
 @login_required
 def reports():
-    if not _ensure_teacher():
-        return redirect(url_for('auth.home'))
+    _require_teacher()
+    reports = Report.query.filter_by(teacher_id=current_user.id).order_by(Report.created_at.desc()).all()
+    return render_template("teacher_reports.html", reports=reports)
 
-    attempts = Attempt.query.filter_by(teacher_id=current_user.id).filter(Attempt.finished_at.isnot(None)).order_by(Attempt.finished_at.desc()).limit(200).all()
-    return render_template("teacher_reports.html", attempts=attempts)
-
-@bp.get("/download_report/<int:attempt_id>")
-@login_required
-def download_report(attempt_id: int):
-    if not _ensure_teacher():
-        return redirect(url_for('auth.home'))
-    return redirect(url_for('files.report', attempt_id=attempt_id))
-
-@bp.get("/question_tool")
+@bp.get("/questions")
 @login_required
 def question_tool():
-    if not _ensure_teacher():
-        return redirect(url_for('auth.home'))
+    _require_teacher()
+    skills = Skill.query.order_by(Skill.order.asc()).all()
+    skill_id = request.args.get("skill_id", type=int)
+    qs = Question.query.filter_by(skill_id=skill_id).order_by(Question.id.desc()).all() if skill_id else []
+    return render_template("teacher_questions.html", skills=skills, skill_id=skill_id, questions=qs)
 
-    skills = Skill.query.filter_by(is_active=True).order_by(Skill.order_index.asc()).all()
-    questions = Question.query.order_by(Question.id.desc()).limit(200).all()
-    return render_template("question_tool.html", skills=skills, questions=questions, role=current_user.role)
-
-@bp.post("/question_tool/add")
+@bp.route("/questions/new", methods=["GET","POST"])
 @login_required
-def add_question():
-    if not _ensure_teacher():
-        return redirect(url_for('auth.home'))
+def question_new():
+    _require_teacher()
+    skills = Skill.query.order_by(Skill.order.asc()).all()
+    if request.method == "GET":
+        return render_template("question_form.html", skills=skills, q=None, action=url_for("teacher.question_new"))
 
-    skill_id = int(request.form.get("skill_id"))
-    qtype = request.form.get("qtype")
-    prompt = (request.form.get("prompt") or "").strip()
-    options = (request.form.get("options") or "").strip()
-    answer = (request.form.get("answer") or "").strip()
-    meta = (request.form.get("meta") or "").strip()
+    return _upsert_question()
 
-    if not prompt:
-        flash("Prompt required.", "error")
-        return redirect(url_for("teacher.question_tool"))
-
-    # options list
-    options_json = None
-    if options:
-        opts = [x.strip() for x in options.split("\n") if x.strip()]
-        options_json = json.dumps(opts, ensure_ascii=False)
-
-    # answer
-    answer_json = None
-    try:
-        if qtype == "mcq_multi":
-            answer_json = json.dumps([int(x.strip()) for x in answer.split(",") if x.strip()], ensure_ascii=False)
-        elif qtype == "short_text":
-            answer_json = json.dumps(answer, ensure_ascii=False)
-        else:
-            answer_json = json.dumps(int(answer), ensure_ascii=False) if answer != "" else None
-    except Exception:
-        answer_json = None
-
-    # meta
-    meta_json = None
-    if meta:
-        try:
-            meta_json = meta if (meta.strip().startswith("{") or meta.strip().startswith("[")) else json.dumps(meta, ensure_ascii=False)
-        except Exception:
-            meta_json = None
-
-    q = Question(skill_id=skill_id, qtype=qtype, prompt=prompt, options_json=options_json, answer_json=answer_json, meta_json=meta_json,
-               status='draft', created_by_id=current_user.id, created_by_role=current_user.role)
-    db.session.add(q)
-    db.session.commit()
-
-    flash("Question added.", "ok")
-    return redirect(url_for("teacher.question_tool"))
-
-@bp.get("/question_import")
-@login_required
-def question_import():
-    if not _ensure_teacher():
-        return redirect(url_for("auth.home"))
-    skills = Skill.query.filter_by(is_active=True).order_by(Skill.order_index.asc()).all()
-    return render_template("teacher_question_import.html", skills=skills)
-
-@bp.post("/question_import/upload")
-@login_required
-def question_import_upload():
-    if not _ensure_teacher():
-        return redirect(url_for("auth.home"))
-
-    import io
-    import csv
-    import json
-    from openpyxl import load_workbook
-
-    f = request.files.get("file")
-    default_skill_id = int(request.form.get("default_skill_id") or "0") or None
-
-    if not f or not f.filename:
-        flash("Upload a CSV/XLSX file.", "error")
-        return redirect(url_for("teacher.question_import"))
-
-    name = f.filename.lower()
-    rows = []
-
-    if name.endswith(".csv"):
-        content = f.read().decode("utf-8-sig")
-        reader = csv.DictReader(io.StringIO(content))
-        rows = list(reader)
-    elif name.endswith(".xlsx"):
-        wb = load_workbook(f, data_only=True)
-        ws = wb.active
-        headers = [str(c.value).strip() if c.value is not None else "" for c in next(ws.iter_rows(min_row=1, max_row=1))]
-        for r in ws.iter_rows(min_row=2, values_only=True):
-            d = {headers[i]: (r[i] if i < len(r) else None) for i in range(len(headers))}
-            rows.append(d)
-    else:
-        flash("Only .csv or .xlsx supported.", "error")
-        return redirect(url_for("teacher.question_import"))
-
-    created = 0
-    skipped = 0
-
-    for row in rows:
-        skill_id = row.get("skill_id")
-        skill_name = row.get("skill_name")
-        qtype = (row.get("qtype") or "").strip()
-        prompt = (row.get("prompt") or "").strip()
-        if not prompt or not qtype:
-            skipped += 1
-            continue
-
-        sid = None
-        try:
-            sid = int(skill_id) if skill_id not in (None, "", "None") else None
-        except Exception:
-            sid = None
-        if sid is None and default_skill_id:
-            sid = default_skill_id
-        if sid is None and skill_name:
-            sk = Skill.query.filter_by(name=str(skill_name).strip()).first()
-            sid = sk.id if sk else None
-        if sid is None:
-            skipped += 1
-            continue
-
-        options_raw = (row.get("options") or "").strip()
-        options_json = None
-        if options_raw:
-            opts = [x.strip() for x in str(options_raw).split("|") if x.strip()]
-            options_json = json.dumps(opts, ensure_ascii=False)
-
-        ans_raw = row.get("answer")
-        answer_json = None
-        try:
-            if qtype == "mcq_multi":
-                answer_json = json.dumps([int(x.strip()) for x in str(ans_raw).split(",") if x.strip()], ensure_ascii=False)
-            elif qtype == "short_text":
-                answer_json = json.dumps(str(ans_raw or ""), ensure_ascii=False)
-            else:
-                answer_json = json.dumps(int(ans_raw), ensure_ascii=False) if ans_raw not in (None, "", "None") else None
-        except Exception:
-            answer_json = json.dumps(str(ans_raw or ""), ensure_ascii=False) if qtype == "short_text" else None
-
-        meta = (row.get("meta_json") or row.get("meta") or "")
-        meta_json = None
-        if meta not in (None, "", "None"):
-            m = str(meta).strip()
-            meta_json = m if (m.startswith("{") or m.startswith("[")) else json.dumps(m, ensure_ascii=False)
-
-        q = Question(skill_id=sid, qtype=qtype, prompt=prompt, options_json=options_json, answer_json=answer_json, meta_json=meta_json,
-               status='draft', created_by_id=current_user.id, created_by_role=current_user.role)
-        db.session.add(q)
-        created += 1
-
-    db.session.commit()
-    flash(f"Imported. Created: {created}, Skipped: {skipped}.", "ok")
-    return redirect(url_for("teacher.question_tool"))
-
-@bp.get("/export/attempts.csv")
-@login_required
-def export_attempts_csv():
-    if not _ensure_teacher():
-        return redirect(url_for('auth.home'))
-
-    import csv, io
-    from flask import Response
-
-    attempts = Attempt.query.filter_by(teacher_id=current_user.id).filter(Attempt.finished_at.isnot(None)).order_by(Attempt.finished_at.desc()).all()
-    output = io.StringIO()
-    w = csv.writer(output)
-    w.writerow(["attempt_id","student_id","student_name","skill","finished_at","duration_sec","score_pct","passed"])
-    for a in attempts:
-        w.writerow([a.id, a.student_id, a.student.name if a.student else "", a.skill.name if a.skill else "", a.finished_at, a.duration_sec, int(round((a.score or 0)*100)), a.passed])
-    return Response(output.getvalue(), mimetype="text/csv", headers={"Content-Disposition":"attachment; filename=teacher_attempts.csv"})
-
-@bp.get("/export/students.csv")
-@login_required
-def export_students_csv():
-    if not _ensure_teacher():
-        return redirect(url_for('auth.home'))
-
-    import csv, io
-    from flask import Response
-
-    students = User.query.filter_by(role="student", teacher_id=current_user.id).order_by(User.id.asc()).all()
-    output = io.StringIO()
-    w = csv.writer(output)
-    w.writerow(["student_id","name"])
-    for s in students:
-        w.writerow([s.id, s.name])
-    return Response(output.getvalue(), mimetype="text/csv", headers={"Content-Disposition":"attachment; filename=teacher_students.csv"})
-
-
-@bp.get("/question_tool/edit/<int:question_id>")
+@bp.route("/questions/<int:question_id>/edit", methods=["GET","POST"])
 @login_required
 def question_edit(question_id: int):
-    if not _ensure_teacher():
-        return redirect(url_for('auth.home'))
+    _require_teacher()
+    q = Question.query.get_or_404(question_id)
+    skills = Skill.query.order_by(Skill.order.asc()).all()
+    if request.method == "GET":
+        return render_template("question_form.html", skills=skills, q=q, action=url_for("teacher.question_edit", question_id=q.id))
+    return _upsert_question(q)
 
-    q = Question.query.get(question_id)
-    if not q:
-        flash("Question not found.", "error")
-        return redirect(url_for("teacher.question_tool"))
-
-    # Teachers can edit only drafts they created (or legacy rows without created_by)
-    if q.status == "approved":
-        flash("Approved questions are locked (chairman can edit).", "error")
-        return redirect(url_for("teacher.question_tool"))
-    if q.created_by_id and q.created_by_id != current_user.id and q.created_by_role == "teacher":
-        flash("You can only edit your own draft questions.", "error")
-        return redirect(url_for("teacher.question_tool"))
-
-    skills = Skill.query.filter_by(is_active=True).order_by(Skill.order_index.asc()).all()
-    return render_template("teacher_question_edit.html", q=q, skills=skills)
-
-@bp.post("/question_tool/edit/<int:question_id>")
+@bp.post("/questions/<int:question_id>/delete")
 @login_required
-def question_edit_post(question_id: int):
-    if not _ensure_teacher():
-        return redirect(url_for('auth.home'))
-
-    import json
-    q = Question.query.get(question_id)
-    if not q:
-        flash("Question not found.", "error")
-        return redirect(url_for("teacher.question_tool"))
-    if q.status == "approved":
-        flash("Approved questions are locked (chairman can edit).", "error")
-        return redirect(url_for("teacher.question_tool"))
-
-    q.skill_id = int(request.form.get("skill_id"))
-    q.qtype = request.form.get("qtype")
-    q.prompt = (request.form.get("prompt") or "").strip()
-
-    options = (request.form.get("options") or "").strip()
-    answer = (request.form.get("answer") or "").strip()
-    meta = (request.form.get("meta") or "").strip()
-
-    if options:
-        opts = [x.strip() for x in options.split("\n") if x.strip()]
-        q.options_json = json.dumps(opts, ensure_ascii=False)
-    else:
-        q.options_json = None
-
-    try:
-        if q.qtype == "mcq_multi":
-            q.answer_json = json.dumps([int(x.strip()) for x in answer.split(",") if x.strip()], ensure_ascii=False)
-        elif q.qtype == "short_text":
-            q.answer_json = json.dumps(answer, ensure_ascii=False)
-        else:
-            q.answer_json = json.dumps(int(answer), ensure_ascii=False) if answer != "" else None
-    except Exception:
-        q.answer_json = json.dumps(answer, ensure_ascii=False) if q.qtype == "short_text" else None
-
-    if meta:
-        m = meta.strip()
-        q.meta_json = m if (m.startswith("{") or m.startswith("[")) else json.dumps(m, ensure_ascii=False)
-    else:
-        q.meta_json = None
-
+def question_delete(question_id: int):
+    _require_teacher()
+    q = Question.query.get_or_404(question_id)
+    skill_id = q.skill_id
+    db.session.delete(q)
     db.session.commit()
-    flash("Draft updated.", "ok")
-    return redirect(url_for("teacher.question_tool"))
+    flash("تم حذف السؤال.", "success")
+    return redirect(url_for("teacher.question_tool", skill_id=skill_id))
 
-@bp.get("/doc_import")
-@login_required
-def doc_import():
-    if not _ensure_teacher():
-        return redirect(url_for('auth.home'))
-    skills = Skill.query.filter_by(is_active=True).order_by(Skill.order_index.asc()).all()
-    return render_template("teacher_doc_import.html", skills=skills)
+def _upsert_question(q: Question | None = None):
+    skill_id = int(request.form.get("skill_id") or 0)
+    qtype = request.form.get("qtype") or "mcq_single"
+    prompt_ar = request.form.get("prompt_ar") or ""
+    choices_raw = request.form.get("choices_ar") or ""
+    correct_raw = request.form.get("correct") or ""
 
-@bp.post("/doc_import")
-@login_required
-def doc_import_post():
-    if not _ensure_teacher():
-        return redirect(url_for('auth.home'))
+    options = None
+    if qtype in ("mcq_single","mcq_multi","tf","video_checkpoint"):
+        ch=[]
+        for line in choices_raw.splitlines():
+            line=line.strip()
+            if not line: 
+                continue
+            if "|" in line:
+                cid, txt = line.split("|",1)
+            else:
+                cid=str(len(ch)+1)
+                txt=line
+            ch.append({"id":cid.strip(), "text_ar":txt.strip()})
+        options={"choices":ch} if ch else None
 
-    import os, json
-    from flask import current_app
-    from ..doc_import import render_pdf_pages_to_images, split_docx_text_to_questions
-    from docx import Document
+    correct_json={"answers":[c.strip() for c in correct_raw.split(",") if c.strip()]} if correct_raw else {"answers":[]}
+    meta=None
+    media=None
+    if qtype=="video_checkpoint":
+        media={"video_url": request.form.get("video_url") or ""}
+        meta={"checkpoint_seconds": int(request.form.get("checkpoint_seconds") or 0)}
 
-    f = request.files.get("file")
-    default_skill_id = int(request.form.get("default_skill_id") or "0") or None
-    mode = request.form.get("mode") or "auto"
-
-    if not f or not f.filename:
-        flash("Upload a PDF or DOCX.", "error")
-        return redirect(url_for("teacher.doc_import"))
-
-    name = f.filename
-    ext = name.rsplit(".",1)[-1].lower() if "." in name else ""
-    if ext not in {"pdf","docx"}:
-        flash("Only PDF or DOCX supported.", "error")
-        return redirect(url_for("teacher.doc_import"))
-
-    if not default_skill_id:
-        flash("Choose a default skill.", "error")
-        return redirect(url_for("teacher.doc_import"))
-
-    # store original under MEDIA_DIR/imports/teacher/<id>/
-    base_dir = os.path.join(current_app.config["MEDIA_DIR"], "imports", "teacher", current_user.id)
-    os.makedirs(base_dir, exist_ok=True)
-    safe = "".join([c if c.isalnum() or c in "._-" else "_" for c in name]).strip("_") or f"upload.{ext}"
-    src_path = os.path.join(base_dir, safe)
-    f.save(src_path)
-
-    created = 0
-    if ext == "pdf":
-        out_dir = os.path.join(current_app.config["MEDIA_DIR"], "teacher", current_user.id, "pdf_imports")
-        prefix =_toggle_prefix(safe)
-        imgs = render_pdf_pages_to_images(src_path, out_dir, prefix=prefix)
-        for img in imgs:
-            rel = f"teacher/{current_user.id}/pdf_imports/{img}"
-            q = Question(
-                skill_id=default_skill_id,
-                qtype="image_mcq_single",
-                prompt=f"Imported from PDF: {safe} — page {img.split('_p')[-1].split('.')[0]}",
-                options_json=None,
-                answer_json=None,
-                meta_json=json.dumps({"image_media": rel}, ensure_ascii=False),
-                status="draft",
-                created_by_id=current_user.id,
-                created_by_role="teacher",
-            )
-            db.session.add(q)
-            created += 1
-        db.session.commit()
-        flash(f"Imported {created} draft questions (one per page). Edit each to add options & answer.", "ok")
-        return redirect(url_for("teacher.question_tool"))
-
-    # DOCX
-    doc = Document(src_path)
-    full_text = "\n".join([p.text for p in doc.paragraphs if p.text])
-    qs = split_docx_text_to_questions(full_text)
-    if not qs:
-        qs = [full_text] if full_text.strip() else []
-    for i, qtext in enumerate(qs, start=1):
-        q = Question(
-            skill_id=default_skill_id,
-            qtype="short_text",
-            prompt=f"Imported from DOCX: {safe}\n\n{qtext}",
-            options_json=None,
-            answer_json=None,
-            meta_json=None,
-            status="draft",
-            created_by_id=current_user.id,
-            created_by_role="teacher",
-        )
+    if q is None:
+        q = Question(skill_id=skill_id, qtype=qtype, prompt_ar=prompt_ar)
         db.session.add(q)
-        created += 1
-    db.session.commit()
-    flash(f"Imported {created} draft questions from DOCX. Review and set type/options/answer.", "ok")
-    return redirect(url_for("teacher.question_tool"))
+    q.skill_id = skill_id
+    q.qtype = qtype
+    q.prompt_ar = prompt_ar
+    q.options_json = options
+    q.correct_json = correct_json
+    q.media_json = media
+    q.meta_json = meta
 
-def _toggle_prefix(filename: str) -> str:
-    base = filename.rsplit(".",1)[0]
-    base = re.sub(r"[^A-Za-z0-9_-]+", "_", base)
-    return base[:40] or "pdf"
+    db.session.commit()
+    flash("تم حفظ السؤال.", "success")
+    return redirect(url_for("teacher.question_tool", skill_id=skill_id))

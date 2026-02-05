@@ -1,38 +1,19 @@
 {% extends "base.html" %}
 {% block content %}
-<h1>Chairman dashboard</h1>
+<h1 class="h1">لوحة رئيس المدرسة</h1>
 
-<div class="grid">
-  <div class="card">
-    <h2>Teacher performance</h2>
-    <table class="table">
-      <thead><tr><th>Teacher</th><th>Attempts</th><th>Avg</th></tr></thead>
-      <tbody>
-        {% for r in perf %}
-          <tr>
-            <td>{{ r.teacher.name }} ({{ r.teacher.id }})</td>
-            <td>{{ r.attempts }}</td>
-            <td>{{ r.avg }}%</td>
-          </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
+<div class="grid2">
+  <div class="card"><h2 class="h2">الطلاب</h2><p class="muted">عدد الطلاب: {{ students|length }}</p></div>
+  <div class="card"><h2 class="h2">المعلمين</h2><p class="muted">عدد المعلمين: {{ teachers|length }}</p></div>
+</div>
 
-  <div class="card">
-    <h2>Students needing attention (lowest averages)</h2>
-    <table class="table">
-      <thead><tr><th>Student</th><th>Attempts</th><th>Avg</th></tr></thead>
-      <tbody>
-        {% for r in sperf[:10] %}
-          <tr>
-            <td>{{ r.student.name }} ({{ r.student.id }})</td>
-            <td>{{ r.attempts }}</td>
-            <td>{{ r.avg }}%</td>
-          </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
+<div class="card">
+  <h2 class="h2">متوسط أداء الطلاب</h2>
+  <table class="table">
+    <tr><th>الطالب</th><th>Student ID</th><th>متوسط</th></tr>
+    {% for r in sperf %}
+      <tr><td>{{ r[1] }}</td><td>{{ r[2] }}</td><td>{{ (r[3] or 0)|round(1) }}%</td></tr>
+    {% endfor %}
+  </table>
 </div>
 {% endblock %}

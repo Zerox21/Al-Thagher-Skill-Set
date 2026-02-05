@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block content %}
+<h1 class="h1">تعديل المهارة</h1>
+
+<form method="post" class="card" action="{{ action }}">
+  <label>اسم المهارة</label><input name="name_ar" value="{{ skill.name_ar }}" required>
+  <label>وصف</label><textarea name="description_ar" rows="3">{{ skill.description_ar or '' }}</textarea>
+  <label>الترتيب</label><input name="order" type="number" value="{{ skill.order or 0 }}">
+  <label>نسبة النجاح</label><input name="pass_threshold" type="number" value="{{ skill.pass_threshold or 60 }}">
+  <label>الوقت بالدقائق</label><input name="time_limit_min" type="number" value="{{ skill.time_limit_min or 10 }}">
+  <button class="btn" type="submit">{{ t('save') }}</button>
+</form>
+{% endblock %}

@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block content %}
+<h1 class="h1">{{ t('media') }}</h1>
+
+<form method="post" action="{{ url_for('media.upload') }}" enctype="multipart/form-data" class="card">
+  <label>رفع ملف (صورة/فيديو/...)</label>
+  <input type="file" name="file" required>
+  <button class="btn" type="submit">{{ t('upload') }}</button>
+</form>
+
+<div class="card">
+  <h2 class="h2">المكتبة</h2>
+  {% if not items %}
+    <p class="muted">لا يوجد.</p>
+  {% else %}
+    <table class="table">
+      <tr><th>ID</th><th>الملف</th><th>نوع</th><th></th></tr>
+      {% for m in items %}
+        <tr><td>{{ m.id }}</td><td>{{ m.filename }}</td><td>{{ m.mime }}</td>
+          <td><a class="btn small" href="{{ url_for('media.file', media_id=m.id) }}">{{ t('download') }}</a></td></tr>
+      {% endfor %}
+    </table>
+  {% endif %}
+</div>
+{% endblock %}

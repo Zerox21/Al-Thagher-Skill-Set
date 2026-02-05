@@ -1,312 +1,205 @@
-from __future__ import annotations
-import os, json
-from datetime import datetime, timedelta
-from flask import Blueprint, render_template, redirect, url_for, flash, request, current_app
+from flask import Blueprint, render_template, request, redirect, url_for, flash, abort
 from flask_login import login_required, current_user
-from .. import db
-from ..models import User, Skill, StudentSkill, Question, Attempt, RemediationUpload
-from ..utils import iso_year_week, generate_attempt_pdf, try_email_pdf
+from sqlalchemy import func
+from app import db
+from app.models import User, Skill, StudentSkillStatus, Question, Attempt, Report, Remediation
+from app.utils import iso_week_key, now_utc
+from app.reporting import generate_report_pdf
+from app.mailer import send_email
+import os
 
 bp = Blueprint("student", __name__)
 
-def _ensure_student():
+def _require_student():
     if current_user.role != "student":
-        flash("Student access only.", "error")
-        return False
-    return True
+        abort(403)
+
+@bp.get("/select-teacher")
+@login_required
+def select_teacher():
+    _require_student()
+    teachers = User.query.filter_by(role="teacher").all()
+    return render_template("student_select_teacher.html", teachers=teachers)
+
+@bp.post("/select-teacher")
+@login_required
+def select_teacher_post():
+    _require_student()
+    tid = request.form.get("teacher_id")
+    teacher = User.query.filter_by(role="teacher", id=tid).first()
+    if not teacher:
+        flash("الرجاء اختيار معلم صحيح.", "danger")
+        return redirect(url_for("student.select_teacher"))
+    current_user.teacher_id = teacher.id
+    db.session.commit()
+    flash("تم حفظ المعلم بنجاح.", "success")
+    return redirect(url_for("student.dashboard"))
 
 @bp.get("/dashboard")
 @login_required
 def dashboard():
-    if not _ensure_student():
-        return redirect(url_for("auth.home"))
+    _require_student()
+    statuses = StudentSkillStatus.query.filter_by(student_id=current_user.id).all()
+    skill_ids = [s.skill_id for s in statuses if s.unlocked]
+    skills = Skill.query.filter(Skill.id.in_(skill_ids)).order_by(Skill.order.asc()).all() if skill_ids else []
+    attempts = Attempt.query.filter_by(student_id=current_user.id).order_by(Attempt.id.desc()).all()
+    rem = Remediation.query.filter_by(student_id=current_user.id).order_by(Remediation.created_at.desc()).all()
+    return render_template("student_dashboard.html", skills=skills, statuses=statuses, attempts=attempts, remediations=rem)
 
-    teacher = User.query.filter_by(id=current_user.teacher_id, role="teacher").first()
-    skills = Skill.query.filter_by(is_active=True).order_by(Skill.order_index.asc()).all()
-    perms = {p.skill_id: p for p in StudentSkill.query.filter_by(student_id=current_user.id).all()}
-    attempts = Attempt.query.filter_by(student_id=current_user.id).order_by(Attempt.started_at.desc()).all()
+def _can_attempt(student_id: int, skill_id: int) -> tuple[bool,str]:
+    wk = iso_week_key()
+    existing = Attempt.query.filter_by(student_id=student_id, skill_id=skill_id, week_key=wk).first()
+    if not existing:
+        return True, wk
+    status = StudentSkillStatus.query.filter_by(student_id=student_id, skill_id=skill_id).first()
+    if status and status.extra_attempt_week == wk:
+        status.extra_attempt_week = None
+        db.session.commit()
+        return True, wk
+    return False, wk
 
-    progress = []
-    for sk in skills:
-        sk_attempts = [a for a in attempts if a.skill_id == sk.id and a.finished_at is not None]
-        progress.append({
-            "skill": sk,
-            "allowed": bool(perms.get(sk.id).allowed) if perms.get(sk.id) else False,
-            "times": len(sk_attempts),
-            "best": int(round(max([a.score or 0 for a in sk_attempts], default=0)*100)),
-            "last": sk_attempts[0].finished_at if sk_attempts else None
-        })
+@bp.get("/skill/<int:skill_id>/start")
+@login_required
+def start(skill_id: int):
+    _require_student()
+    status = StudentSkillStatus.query.filter_by(student_id=current_user.id, skill_id=skill_id).first()
+    if not status or not status.unlocked:
+        flash("هذه المهارة غير متاحة حالياً.", "danger")
+        return redirect(url_for("student.dashboard"))
 
-    rem_files = RemediationUpload.query.filter_by(student_id=current_user.id).order_by(RemediationUpload.uploaded_at.desc()).all()
-    return render_template("student_dashboard.html", teacher=teacher, progress=progress, attempts=attempts[:10], rem_files=rem_files)
+    ok, wk = _can_attempt(current_user.id, skill_id)
+    if not ok:
+        flash("لا يمكن إعادة الاختبار لهذه المهارة هذا الأسبوع.", "warning")
+        return redirect(url_for("student.dashboard"))
 
+    attempt = Attempt(student_id=current_user.id, skill_id=skill_id, week_key=wk, status="in_progress")
+    db.session.add(attempt)
+    db.session.commit()
+    return redirect(url_for("student.take", attempt_id=attempt.id))
 
 @bp.get("/attempt/<int:attempt_id>")
 @login_required
-def resume(attempt_id: int):
-    if not _ensure_student():
-        return redirect(url_for("auth.home"))
-
-    attempt = Attempt.query.get(attempt_id)
-    if not attempt or attempt.student_id != current_user.id:
-        flash("Attempt not found.", "error")
-        return redirect(url_for("student.dashboard"))
-
-    if attempt.finished_at is not None:
-        return redirect(url_for("student.result", attempt_id=attempt.id))
+def take(attempt_id: int):
+    _require_student()
+    attempt = Attempt.query.get_or_404(attempt_id)
+    if attempt.student_id != current_user.id:
+        abort(403)
+    if attempt.status == "submitted":
+        return redirect(url_for("student.attempt_result", attempt_id=attempt.id))
 
     skill = Skill.query.get(attempt.skill_id)
-    questions = Question.query.filter_by(skill_id=attempt.skill_id, status='approved').all()
-    duration_min = (skill.duration_min or current_app.config["DEFAULT_TEST_DURATION_MIN"]) if skill else current_app.config["DEFAULT_TEST_DURATION_MIN"]
-    return render_template("test.html", attempt=attempt, skill=skill, duration_min=duration_min, questions=questions)
+    questions = Question.query.filter_by(skill_id=skill.id).order_by(Question.id.asc()).all()
+    return render_template("student_take_test.html", attempt=attempt, skill=skill, questions=questions)
 
-@bp.post("/autosave/<int:attempt_id>")
-@login_required
-def autosave(attempt_id: int):
-    if not _ensure_student():
-        return {"ok": False, "error": "student_only"}, 403
-
-    attempt = Attempt.query.get(attempt_id)
-    if not attempt or attempt.student_id != current_user.id or attempt.finished_at is not None:
-        return {"ok": False, "error": "attempt_not_found"}, 404
-
-    data = request.get_json(silent=True) or {}
-    answers = data.get("answers", {})
-
-    try:
-        attempt.draft_answers_json = json.dumps(answers, ensure_ascii=False)
-        attempt.last_saved_at = datetime.utcnow()
-        db.session.commit()
-        return {"ok": True, "saved_at": attempt.last_saved_at.isoformat() + "Z"}
-    except Exception:
-        current_app.logger.exception("autosave failed")
-        return {"ok": False, "error": "save_failed"}, 500
-
-def _weekly_limit_reached(skill_id: int) -> bool:
-    now = datetime.utcnow()
-    y, w = iso_year_week(now)
-    q = Attempt.query.filter_by(student_id=current_user.id, iso_year=y, iso_week=w)
-    if current_app.config["WEEKLY_LIMIT_SCOPE"] == "student_skill":
-        q = q.filter_by(skill_id=skill_id)
-    return q.count() >= current_app.config["WEEKLY_LIMIT"]
-
-@bp.get("/start/<int:skill_id>")
-@login_required
-def start(skill_id: int):
-    if not _ensure_student():
-        return redirect(url_for("auth.home"))
-
-    if not current_user.teacher_id:
-        flash("No teacher selected. Log out and choose your teacher.", "error")
-        return redirect(url_for("student.dashboard"))
-
-    perm = StudentSkill.query.filter_by(student_id=current_user.id, skill_id=skill_id).first()
-    if not perm or not perm.allowed:
-        flash("This skill is locked. Your teacher must allow it.", "error")
-        return redirect(url_for("student.dashboard"))
-
-    if _weekly_limit_reached(skill_id):
-        flash("Weekly access limit reached (1 attempt per week).", "error")
-        return redirect(url_for("student.dashboard"))
-
-    skill = Skill.query.get(skill_id)
-    if not skill or not skill.is_active:
-        flash("Skill not found.", "error")
-        return redirect(url_for("student.dashboard"))
-
-    questions = Question.query.filter_by(skill_id=skill_id, status='approved').all()
-    if not questions:
-        flash("No questions yet for this skill (admin will add later).", "error")
-        return redirect(url_for("student.dashboard"))
-
-    now = datetime.utcnow()
-    y, w = iso_year_week(now)
-    attempt = Attempt(
-        student_id=current_user.id,
-        teacher_id=current_user.teacher_id,
-        skill_id=skill_id,
-        iso_year=y,
-        iso_week=w,
-        started_at=now
-    )
-    db.session.add(attempt)
-    db.session.commit()
-
-    duration_min = skill.duration_min or current_app.config["DEFAULT_TEST_DURATION_MIN"]
-    return render_template("test.html", attempt=attempt, skill=skill, duration_min=duration_min, questions=questions)
-
-@bp.post("/submit/<int:attempt_id>")
+@bp.post("/attempt/<int:attempt_id>/submit")
 @login_required
 def submit(attempt_id: int):
-    if not _ensure_student():
-        return redirect(url_for("auth.home"))
-
-    attempt = Attempt.query.get(attempt_id)
-    if not attempt or attempt.student_id != current_user.id:
-        flash("Attempt not found.", "error")
-        return redirect(url_for("student.dashboard"))
-    if attempt.finished_at is not None:
-        return redirect(url_for("student.result", attempt_id=attempt.id))
+    _require_student()
+    attempt = Attempt.query.get_or_404(attempt_id)
+    if attempt.student_id != current_user.id:
+        abort(403)
+    if attempt.status == "submitted":
+        return redirect(url_for("student.attempt_result", attempt_id=attempt.id))
 
     skill = Skill.query.get(attempt.skill_id)
-    questions = Question.query.filter_by(skill_id=attempt.skill_id, status='approved').all()
-    duration_min = skill.duration_min or current_app.config["DEFAULT_TEST_DURATION_MIN"]
+    questions = Question.query.filter_by(skill_id=skill.id).order_by(Question.id.asc()).all()
 
-    now = datetime.utcnow()
-    max_end = attempt.started_at + timedelta(minutes=duration_min)
-    finished_at = min(now, max_end)
+    elapsed = int((now_utc() - attempt.started_at).total_seconds())
+    max_seconds = int(skill.time_limit_min or 10) * 60
+    if elapsed > max_seconds + 5:
+        elapsed = max_seconds
 
-    answers_payload = []
-    correct, total = 0, 0
-
-    draft_map = {}
-    try:
-        draft_map = json.loads(attempt.draft_answers_json) if attempt.draft_answers_json else {}
-    except Exception:
-        draft_map = {}
-
+    answers = {}
+    correct = 0
     for q in questions:
-        total += 1
         key = f"q_{q.id}"
-        raw = request.form.getlist(key) if q.qtype == "mcq_multi" else request.form.get(key)
-        if (raw is None or raw == [] or raw == "") and str(q.id) in draft_map:
-            raw = draft_map.get(str(q.id))
-
-        try:
-            correct_answer = json.loads(q.answer_json) if q.answer_json else None
-        except Exception:
-            correct_answer = None
-
-        is_correct = False
-
-        if q.qtype in {"mcq_single","true_false","image_mcq_single","video_cued_mcq_single"}:
-            try:
-                is_correct = (raw is not None and correct_answer is not None and int(raw) == int(correct_answer))
-            except Exception:
-                is_correct = False
-            student_disp = raw if raw is not None else "-"
-            correct_disp = str(correct_answer) if correct_answer is not None else "-"
-
+        if q.qtype in ("mcq_single","tf","video_checkpoint"):
+            val = request.form.get(key) or ""
+            answers[str(q.id)] = [val] if val else []
+            if q.correct_json and val and val in (q.correct_json.get("answers") or []):
+                correct += 1
         elif q.qtype == "mcq_multi":
-            try:
-                chosen = sorted([int(x) for x in raw])
-                corr = sorted([int(x) for x in (correct_answer or [])])
-                is_correct = (chosen == corr)
-                student_disp = ",".join(map(str, chosen)) if chosen else "-"
-                correct_disp = ",".join(map(str, corr)) if corr else "-"
-            except Exception:
-                is_correct = False
-                student_disp, correct_disp = "-", "-"
+            vals = request.form.getlist(key)
+            answers[str(q.id)] = vals
+            if q.correct_json and sorted(vals) == sorted(q.correct_json.get("answers") or []):
+                correct += 1
+        elif q.qtype in ("short","numeric"):
+            val = (request.form.get(key) or "").strip()
+            answers[str(q.id)] = [val]
+            if q.correct_json and val and val == str((q.correct_json.get("answers") or [""])[0]):
+                correct += 1
 
-        elif q.qtype == "short_text":
-            target = str(correct_answer or "").strip().lower()
-            given = (raw or "").strip().lower()
-            is_correct = bool(target) and (given == target)
-            student_disp = raw or "-"
-            correct_disp = str(correct_answer or "-")
+    total = max(len(questions), 1)
+    score = int(round((correct / total) * 100))
 
-        else:
-            student_disp = str(raw) if raw is not None else "-"
-            correct_disp = str(correct_answer) if correct_answer is not None else "-"
-            is_correct = False
-
-        if is_correct:
-            correct += 1
-
-        answers_payload.append({
-            "question_id": q.id,
-            "prompt": q.prompt,
-            "qtype": q.qtype,
-            "student_answer": student_disp,
-            "correct_answer": correct_disp,
-            "is_correct": is_correct
-        })
-
-    score = correct / total if total else 0.0
-    attempt.finished_at = finished_at
-    attempt.duration_sec = int((finished_at - attempt.started_at).total_seconds())
+    attempt.answers_json = answers
     attempt.score = score
-    attempt.correct_count = correct
-    attempt.total_count = total
-    attempt.passed = passed
-    attempt.answers_json = json.dumps(answers_payload, ensure_ascii=False)
-
-    lacking = _compute_lacking_skills(current_user.id)
-
-    pdf_filename = f"attempt_{attempt.id}.pdf"
-    pdf_abs = os.path.join(current_app.config['REPORTS_DIR'], pdf_filename)
-    teacher = User.query.filter_by(id=attempt.teacher_id, role="teacher").first()
-
-    generate_attempt_pdf(
-        pdf_abs,
-        school_name="Al Thaghr School",
-        student_id=current_user.id,
-        student_name=current_user.name,
-        teacher_name=teacher.name if teacher else "-",
-        skill_name=skill.name if skill else "-",
-        started_at=attempt.started_at,
-        finished_at=attempt.finished_at,
-        duration_sec=attempt.duration_sec,
-        answers=answers_payload,
-        summary={
-            "score_pct": int(round(score*100)),
-            "correct": correct,
-            "total": total,
-            "lacking_skills": lacking,
-            "pass_pct": pass_pct,
-            "pass_fail": "PASS" if passed else "FAIL",
-        }
-    )
-    attempt.pdf_path = pdf_filename
+    attempt.status = "submitted"
+    attempt.ended_at = now_utc()
+    attempt.time_seconds = elapsed
     db.session.commit()
 
-    # optional email
-    if teacher and teacher.email:
-        try_email_pdf(
-            teacher.email,
-            subject=f"Student test report — {current_user.name} — {skill.name}",
-            body="Attached is the PDF report for the completed test.",
-            pdf_path=pdf_abs
-        )
+    status = StudentSkillStatus.query.filter_by(student_id=current_user.id, skill_id=skill.id).first()
+    passed = score >= int(skill.pass_threshold or 60)
+    if status and passed:
+        status.completed = True
+        db.session.commit()
 
-    return redirect(url_for("student.result", attempt_id=attempt.id))
+    teacher = User.query.get(current_user.teacher_id) if current_user.teacher_id else None
+    from flask import current_app
+    reports_dir = current_app.config["REPORTS_DIR"]
+    pdf_path = os.path.join(reports_dir, f"report_attempt_{attempt.id}.pdf")
 
-def _compute_lacking_skills(student_id: str):
-    rows = Attempt.query.filter_by(student_id=student_id).filter(Attempt.finished_at.isnot(None)).all()
-    by_skill = {}
-    for a in rows:
-        by_skill.setdefault(a.skill_id, []).append(a.score or 0)
-    avgs = []
-    for sid, vals in by_skill.items():
-        avg = sum(vals)/len(vals) if vals else 0
-        avgs.append((avg, sid))
-    avgs.sort(key=lambda x: x[0])
-    out = []
-    from ..models import Skill
-    for avg, sid in avgs[:3]:
-        sk = Skill.query.get(sid)
-        if sk:
-            out.append(sk.name)
-    return out
+    # weak skills (top 3)
+    rows = (db.session.query(Attempt.skill_id, func.avg(Attempt.score))
+            .filter(Attempt.student_id == current_user.id, Attempt.status=="submitted")
+            .group_by(Attempt.skill_id).all())
+    rows_sorted = sorted(rows, key=lambda r: r[1])
+    weak_skill_ids = [r[0] for r in rows_sorted[:3]]
+    weak_lines = []
+    if weak_skill_ids:
+        weak_skills = Skill.query.filter(Skill.id.in_(weak_skill_ids)).all()
+        weak_lines = [f"- {s.name_ar}" for s in weak_skills]
 
-@bp.get("/result/<int:attempt_id>")
+    lines = [
+        f"اسم الطالب: {current_user.name_ar} ({current_user.student_id})",
+        f"المهارة: {skill.name_ar}",
+        f"النتيجة: {score}% | الحالة: {'ناجح' if passed else 'راسب'}",
+        f"الوقت المستهلك: {elapsed} ثانية",
+        f"التاريخ: {now_utc().strftime('%Y-%m-%d %H:%M UTC')}",
+        "—",
+        "تفاصيل الإجابات:",
+    ]
+    for q in questions:
+        a = answers.get(str(q.id), [])
+        ca = (q.correct_json or {}).get("answers") if q.correct_json else []
+        lines.append(f"س: {q.prompt_ar[:120]}")
+        lines.append(f"إجابة الطالب: {', '.join(a) if a else '-'}")
+        lines.append(f"الإجابة الصحيحة: {', '.join(ca) if ca else '-'}")
+        lines.append(" ")
+
+    if weak_lines:
+        lines.append("أضعف المهارات (الأكثر احتياجاً):")
+        lines.extend(weak_lines)
+
+    generate_report_pdf(pdf_path, "تقرير نتيجة الاختبار", lines)
+
+    if teacher:
+        rep = Report(attempt_id=attempt.id, teacher_id=teacher.id, url=f"/media/report/{attempt.id}", storage_key=pdf_path)
+        db.session.add(rep)
+        db.session.commit()
+        if teacher.email:
+            send_email(teacher.email, "تقرير اختبار الطالب", "مرفق تقرير اختبار الطالب.", attachment_path=pdf_path)
+
+    return redirect(url_for("student.attempt_result", attempt_id=attempt.id))
+
+@bp.get("/attempt/<int:attempt_id>/result")
 @login_required
-def result(attempt_id: int):
-    if not _ensure_student():
-        return redirect(url_for("auth.home"))
-
-    attempt = Attempt.query.get(attempt_id)
-    if not attempt or attempt.student_id != current_user.id:
-        flash("Attempt not found.", "error")
-        return redirect(url_for("student.dashboard"))
-
-    answers = json.loads(attempt.answers_json) if attempt.answers_json else []
+def attempt_result(attempt_id: int):
+    _require_student()
+    attempt = Attempt.query.get_or_404(attempt_id)
+    if attempt.student_id != current_user.id:
+        abort(403)
     skill = Skill.query.get(attempt.skill_id)
-    return render_template("student_result.html", attempt=attempt, skill=skill, answers=answers)
-
-@bp.get("/download_report/<int:attempt_id>")
-@login_required
-def download_report(attempt_id: int):
-    if not _ensure_student():
-        return redirect(url_for("auth.home"))
-    return redirect(url_for("files.report", attempt_id=attempt_id))
+    rems = Remediation.query.filter_by(student_id=current_user.id, skill_id=skill.id).order_by(Remediation.created_at.desc()).all()
+    return render_template("student_attempt_result.html", attempt=attempt, skill=skill, remediations=rems)

@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block content %}
+<h1 class="h1">مراجعة الاستيراد #{{ batch.id }}</h1>
+<p class="muted">المهارة: {{ skill.name_ar }} — الملف: {{ batch.filename }}</p>
+
+<form method="post" action="{{ url_for('imports.apply', batch_id=batch.id) }}">
+  {% for it in items %}
+    <div class="card">
+      <div class="muted small">Item #{{ it.id }}</div>
+      <label>نوع السؤال</label>
+      <select name="type_{{ it.id }}">
+        <option value="short">إجابة قصيرة</option>
+        <option value="numeric">رقمي</option>
+        <option value="mcq_single">اختيار واحد</option>
+        <option value="mcq_multi">اختيار متعدد</option>
+        <option value="tf">صح/خطأ</option>
+      </select>
+
+      <label>نص السؤال</label>
+      <textarea name="prompt_{{ it.id }}" rows="4">{{ it.raw_text }}</textarea>
+
+      <label>الخيارات</label>
+      <textarea name="choices_{{ it.id }}" rows="3" placeholder="a|الخيار الأول&#10;b|الخيار الثاني"></textarea>
+
+      <label>الإجابة الصحيحة (IDs مفصولة بفاصلة)</label>
+      <input name="correct_{{ it.id }}" placeholder="a">
+    </div>
+  {% endfor %}
+  <button class="btn" type="submit">اعتماد وإنشاء الأسئلة</button>
+</form>
+{% endblock %}

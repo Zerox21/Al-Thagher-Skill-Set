@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block content %}
+<h1 class="h1">{% if q %}تعديل سؤال{% else %}إضافة سؤال{% endif %}</h1>
+<form method="post" class="card" action="{{ action }}">
+  <label>المهارة</label>
+  <select name="skill_id" required>
+    {% for s in skills %}
+      <option value="{{ s.id }}" {% if q and q.skill_id==s.id %}selected{% endif %}>{{ s.name_ar }}</option>
+    {% endfor %}
+  </select>
+
+  <label>نوع السؤال</label>
+  <select name="qtype" id="qtype" onchange="toggleVideo()">
+    {% set cur = q.qtype if q else 'mcq_single' %}
+    <option value="mcq_single" {% if cur=='mcq_single' %}selected{% endif %}>اختيار من متعدد (إجابة واحدة)</option>
+    <option value="mcq_multi" {% if cur=='mcq_multi' %}selected{% endif %}>اختيار من متعدد (متعدد)</option>
+    <option value="tf" {% if cur=='tf' %}selected{% endif %}>صح/خطأ</option>
+    <option value="short" {% if cur=='short' %}selected{% endif %}>إجابة قصيرة</option>
+    <option value="numeric" {% if cur=='numeric' %}selected{% endif %}>رقمي</option>
+    <option value="video_checkpoint" {% if cur=='video_checkpoint' %}selected{% endif %}>فيديو تفاعلي (Checkpoint)</option>
+  </select>
+
+  <label>نص السؤال (يدعم LaTeX داخل \(...\))</label>
+  <textarea name="prompt_ar" rows="4" required>{{ q.prompt_ar if q else '' }}</textarea>
+
+  <div id="choicesWrap">
+    <label>الخيارات (كل سطر: id|النص أو فقط النص)</label>
+    <textarea name="choices_ar" rows="4">{% if q and q.options_json %}{% for ch in (q.options_json.get('choices',[])) %}{{ ch.id }}|{{ ch.text_ar }}{% if not loop.last %}&#10;{% endif %}{% endfor %}{% endif %}</textarea>
+    <label>الإجابة الصحيحة (IDs مفصولة بفاصلة)</label>
+    <input name="correct" value="{% if q and q.correct_json %}{{ (q.correct_json.get('answers',[])|join(',')) }}{% endif %}">
+  </div>
+
+  <div id="videoWrap" style="display:none;">
+    <label>رابط الفيديو (MP4)</label>
+    <input name="video_url" value="{% if q and q.media_json %}{{ q.media_json.get('video_url','') }}{% endif %}">
+    <label>ثانية السماح بالإجابة</label>
+    <input name="checkpoint_seconds" type="number" value="{% if q and q.meta_json %}{{ q.meta_json.get('checkpoint_seconds',5) }}{% else %}5{% endif %}">
+  </div>
+
+  <button class="btn" type="submit">{{ t('save') }}</button>
+</form>
+
+<script>
+function toggleVideo(){
+  const v = document.getElementById('qtype').value;
+  document.getElementById('videoWrap').style.display = (v==='video_checkpoint') ? 'block' : 'none';
+}
+toggleVideo();
+</script>
+{% endblock %}

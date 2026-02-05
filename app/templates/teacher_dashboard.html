@@ -1,33 +1,61 @@
 {% extends "base.html" %}
 {% block content %}
-<h1>Teacher dashboard</h1>
+<h1 class="h1">لوحة المعلم</h1>
 
-<div class="grid">
-  <div class="card">
-    <h2>Your performance</h2>
-    <div class="muted">Average score across all finished attempts</div>
-    <div class="big">{{ avg_score }}%</div>
-    </div>
+<div class="card">
+  <h2 class="h2">الطلاب</h2>
+  {% if not students %}
+    <p class="muted">لا يوجد طلاب مرتبطون بك بعد.</p>
+  {% else %}
+    <table class="table">
+      <tr><th>الطالب</th><th>Student ID</th><th>فتح مهارة</th><th>قفل</th><th>محاولة إضافية</th></tr>
+      {% for s in students %}
+        <tr>
+          <td>{{ s.name_ar }}</td>
+          <td>{{ s.student_id }}</td>
+          <td>
+            <form method="post" action="{{ url_for('teacher.unlock_skill', student_id=s.id) }}" class="inline">
+              <select name="skill_id" required>
+                <option value="">-- مهارة --</option>
+                {% for sk in skills %}<option value="{{ sk.id }}">{{ sk.name_ar }}</option>{% endfor %}
+              </select>
+              <button class="btn small" type="submit">فتح</button>
+            </form>
+          </td>
+          <td>
+            <form method="post" action="{{ url_for('teacher.lock_skill', student_id=s.id) }}" class="inline">
+              <select name="skill_id" required>
+                <option value="">-- مهارة --</option>
+                {% for sk in skills %}<option value="{{ sk.id }}">{{ sk.name_ar }}</option>{% endfor %}
+              </select>
+              <button class="btn small ghost" type="submit">قفل</button>
+            </form>
+          </td>
+          <td>
+            <form method="post" action="{{ url_for('teacher.allow_extra_attempt', student_id=s.id) }}" class="inline">
+              <select name="skill_id" required>
+                <option value="">-- مهارة --</option>
+                {% for sk in skills %}<option value="{{ sk.id }}">{{ sk.name_ar }}</option>{% endfor %}
+              </select>
+              <button class="btn small" type="submit">سماح</button>
+            </form>
+          </td>
+        </tr>
+      {% endfor %}
+    </table>
+  {% endif %}
+</div>
 
-  <div class="card">
-    <h2>Your students</h2>
-    {% if student_rows %}
-      <table class="table">
-        <thead><tr><th>Student</th><th>Attempts</th><th>Avg</th><th></th></tr></thead>
-        <tbody>
-          {% for r in student_rows %}
-            <tr>
-              <td>{{ r.student.name }} ({{ r.student.id }})</td>
-              <td>{{ r.attempts }}</td>
-              <td>{{ r.avg }}%</td>
-              <td><a class="link" href="{{ url_for('teacher.student_detail', student_id=r.student.id) }}">Open</a></td>
-            </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    {% else %}
-      <div class="muted">No students linked to you yet.</div>
-    {% endif %}
-  </div>
+<div class="card">
+  <h2 class="h2">آخر التقارير</h2>
+  {% if not reports %}
+    <p class="muted">لا توجد تقارير.</p>
+  {% else %}
+    <ul>
+      {% for r in reports[:10] %}
+        <li><a class="link" href="{{ r.url }}">تحميل تقرير (Attempt #{{ r.attempt_id }})</a></li>
+      {% endfor %}
+    </ul>
+  {% endif %}
 </div>
 {% endblock %}

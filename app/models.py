@@ -1,104 +1,119 @@
-from __future__ import annotations
-from datetime import datetime
+import datetime as dt
+from sqlalchemy import UniqueConstraint
 from flask_login import UserMixin
 from werkzeug.security import generate_password_hash, check_password_hash
-from . import db
+from app import db
 
-class User(UserMixin, db.Model):
-    id = db.Column(db.String(64), primary_key=True)
-    role = db.Column(db.String(16), nullable=False)  # student / teacher / chairman
-    name = db.Column(db.String(128), nullable=False)
-    pin_hash = db.Column(db.String(256), nullable=False)
+class User(db.Model, UserMixin):
+    id = db.Column(db.Integer, primary_key=True)
+    username = db.Column(db.String(80), unique=True, nullable=False)
+    name_ar = db.Column(db.String(200), nullable=False, default="")
+    name_en = db.Column(db.String(200), nullable=True)
+    role = db.Column(db.String(20), nullable=False)  # chairman|teacher|student
+    email = db.Column(db.String(200), nullable=True)
 
-    # Student-only
-    teacher_id = db.Column(db.String(64), db.ForeignKey("user.id"), nullable=True)
-    # Teacher-only
-    email = db.Column(db.String(256), nullable=True)
+    student_id = db.Column(db.String(50), unique=True, nullable=True)
+    teacher_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=True)
+    password_hash = db.Column(db.String(255), nullable=True)
 
-    def set_pin(self, pin: str) -> None:
-        self.pin_hash = generate_password_hash(pin)
+    created_at = db.Column(db.DateTime, default=dt.datetime.utcnow)
 
-    def check_pin(self, pin: str) -> bool:
-        return check_password_hash(self.pin_hash, pin)
+    def set_password(self, pw: str):
+        self.password_hash = generate_password_hash(pw)
 
-    def get_id(self) -> str:
-        return self.id
+    def check_password(self, pw: str) -> bool:
+        return check_password_hash(self.password_hash or "", pw)
 
 class Skill(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    name = db.Column(db.String(160), nullable=False)
-    order_index = db.Column(db.Integer, default=0)
-    duration_min = db.Column(db.Integer, nullable=True)
-    pass_pct = db.Column(db.Integer, nullable=True)  # pass threshold percent
-    is_active = db.Column(db.Boolean, default=True)
+    name_ar = db.Column(db.String(200), nullable=False)
+    name_en = db.Column(db.String(200), nullable=True)
+    description_ar = db.Column(db.Text, nullable=True)
+    description_en = db.Column(db.Text, nullable=True)
+    order = db.Column(db.Integer, default=0)
+    pass_threshold = db.Column(db.Integer, default=60)
+    time_limit_min = db.Column(db.Integer, default=10)
+    created_at = db.Column(db.DateTime, default=dt.datetime.utcnow)
 
-class StudentSkill(db.Model):
+class StudentSkillStatus(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    student_id = db.Column(db.String(64), db.ForeignKey("user.id"), nullable=False)
+    student_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False)
     skill_id = db.Column(db.Integer, db.ForeignKey("skill.id"), nullable=False)
-    allowed = db.Column(db.Boolean, default=False)
-    unlocked_at = db.Column(db.DateTime, nullable=True)
-    locked_reason = db.Column(db.String(256), nullable=True)
+    unlocked = db.Column(db.Boolean, default=False)
+    completed = db.Column(db.Boolean, default=False)
+    extra_attempt_week = db.Column(db.String(12), nullable=True)
+    __table_args__ = (UniqueConstraint("student_id", "skill_id", name="uq_student_skill"),)
 
-    student = db.relationship("User", foreign_keys=[student_id])
-    skill = db.relationship("Skill")
+class Media(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    filename = db.Column(db.String(255), nullable=False)
+    mime = db.Column(db.String(100), nullable=True)
+    url = db.Column(db.Text, nullable=False)
+    storage_key = db.Column(db.Text, nullable=True)
+    uploaded_by = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=True)
+    created_at = db.Column(db.DateTime, default=dt.datetime.utcnow)
 
 class Question(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     skill_id = db.Column(db.Integer, db.ForeignKey("skill.id"), nullable=False)
-    qtype = db.Column(db.String(32), nullable=False)
-    prompt = db.Column(db.Text, nullable=False)
+    qtype = db.Column(db.String(50), nullable=False)
+    prompt_ar = db.Column(db.Text, nullable=False)
+    prompt_en = db.Column(db.Text, nullable=True)
 
-    options_json = db.Column(db.Text, nullable=True)
-    answer_json = db.Column(db.Text, nullable=True)
-    meta_json = db.Column(db.Text, nullable=True)
-
-    status = db.Column(db.String(16), default="draft")  # draft / approved
-    created_by_id = db.Column(db.String(64), nullable=True)
-    created_by_role = db.Column(db.String(16), nullable=True)
-    approved_by_id = db.Column(db.String(64), nullable=True)
-    approved_at = db.Column(db.DateTime, nullable=True)
-
-    skill = db.relationship("Skill")
+    options_json = db.Column(db.JSON, nullable=True)
+    correct_json = db.Column(db.JSON, nullable=True)
+    media_json = db.Column(db.JSON, nullable=True)
+    meta_json = db.Column(db.JSON, nullable=True)
+    created_at = db.Column(db.DateTime, default=dt.datetime.utcnow)
 
 class Attempt(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    student_id = db.Column(db.String(64), db.ForeignKey("user.id"), nullable=False)
-    teacher_id = db.Column(db.String(64), db.ForeignKey("user.id"), nullable=False)
+    student_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False)
     skill_id = db.Column(db.Integer, db.ForeignKey("skill.id"), nullable=False)
+    week_key = db.Column(db.String(12), nullable=False)
 
-    iso_year = db.Column(db.Integer, nullable=False)
-    iso_week = db.Column(db.Integer, nullable=False)
+    started_at = db.Column(db.DateTime, default=dt.datetime.utcnow)
+    ended_at = db.Column(db.DateTime, nullable=True)
+    time_seconds = db.Column(db.Integer, default=0)
 
-    started_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
-    finished_at = db.Column(db.DateTime, nullable=True)
-    duration_sec = db.Column(db.Integer, nullable=True)
+    score = db.Column(db.Integer, default=0)
+    status = db.Column(db.String(20), default="in_progress")
+    answers_json = db.Column(db.JSON, nullable=True)
 
-    score = db.Column(db.Float, nullable=True)
-    correct_count = db.Column(db.Integer, nullable=True)
-    total_count = db.Column(db.Integer, nullable=True)
-    passed = db.Column(db.Boolean, nullable=True)
+    created_at = db.Column(db.DateTime, default=dt.datetime.utcnow)
 
-    answers_json = db.Column(db.Text, nullable=True)
-    draft_answers_json = db.Column(db.Text, nullable=True)
-    last_saved_at = db.Column(db.DateTime, nullable=True)
-    pdf_path = db.Column(db.String(512), nullable=True)
+    __table_args__ = (UniqueConstraint("student_id", "skill_id", "week_key", name="uq_attempt_week"),)
 
-    student = db.relationship("User", foreign_keys=[student_id])
-    teacher = db.relationship("User", foreign_keys=[teacher_id])
-    skill = db.relationship("Skill")
-
-class RemediationUpload(db.Model):
+class Report(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    teacher_id = db.Column(db.String(64), db.ForeignKey("user.id"), nullable=False)
-    student_id = db.Column(db.String(64), db.ForeignKey("user.id"), nullable=False)
+    attempt_id = db.Column(db.Integer, db.ForeignKey("attempt.id"), nullable=False, unique=True)
+    teacher_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False)
+    url = db.Column(db.Text, nullable=False)
+    storage_key = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime, default=dt.datetime.utcnow)
+
+class Remediation(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    teacher_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False)
+    student_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False)
     skill_id = db.Column(db.Integer, db.ForeignKey("skill.id"), nullable=False)
+    notes_ar = db.Column(db.Text, nullable=True)
+    notes_en = db.Column(db.Text, nullable=True)
+    file_media_id = db.Column(db.Integer, db.ForeignKey("media.id"), nullable=False)
+    created_at = db.Column(db.DateTime, default=dt.datetime.utcnow)
 
-    filename = db.Column(db.String(256), nullable=False)
-    stored_path = db.Column(db.String(512), nullable=False)
-    uploaded_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
-    note = db.Column(db.String(512), nullable=True)
+class ImportBatch(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    created_by = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False)
+    skill_id = db.Column(db.Integer, db.ForeignKey("skill.id"), nullable=False)
+    filename = db.Column(db.String(255), nullable=False)
+    source_type = db.Column(db.String(20), nullable=False)  # pdf|docx
+    status = db.Column(db.String(20), default="draft")
+    created_at = db.Column(db.DateTime, default=dt.datetime.utcnow)
 
-    teacher = db.relationship("User", foreign_keys=[teacher_id])
-    student = db.relationship("User", foreign_keys=[student_id])
-    skill = db.relationship("Skill")
+class ImportItem(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    batch_id = db.Column(db.Integer, db.ForeignKey("import_batch.id"), nullable=False)
+    raw_text = db.Column(db.Text, nullable=False)
+    suggested_type = db.Column(db.String(50), nullable=True)
+    created_at = db.Column(db.DateTime, default=dt.datetime.utcnow)

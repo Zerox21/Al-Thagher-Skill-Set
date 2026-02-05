@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block content %}
+<h1 class="h1">نتيجة الاختبار</h1>
+<div class="card">
+  <div>المهارة: {{ skill.name_ar }}</div>
+  <div>النتيجة: <b>{{ attempt.score }}%</b></div>
+  <div>الوقت المستهلك: {{ attempt.time_seconds }} ثانية</div>
+  <div class="mt">
+    <a class="btn small" href="{{ url_for('media.report', attempt_id=attempt.id) }}">{{ t('download') }} تقرير PDF</a>
+  </div>
+</div>
+
+<div class="card">
+  <h2 class="h2">{{ t('remediation') }}</h2>
+  {% if not remediations %}
+    <p class="muted">لا توجد ملفات علاجية لهذه المهارة.</p>
+  {% else %}
+    <ul>
+      {% for r in remediations %}
+        <li><a class="link" href="{{ url_for('media.file', media_id=r.file_media_id) }}">{{ t('download') }}</a>
+          {% if r.notes_ar %}<div class="muted small">{{ r.notes_ar }}</div>{% endif %}
+        </li>
+      {% endfor %}
+    </ul>
+  {% endif %}
+</div>
+{% endblock %}

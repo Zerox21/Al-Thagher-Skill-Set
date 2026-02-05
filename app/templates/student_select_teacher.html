@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block content %}
+<h1 class="h1">{{ t('select_teacher') }}</h1>
+<p class="muted">{{ t('first_time_teacher') }}</p>
+<form method="post" class="card" action="{{ url_for('student.select_teacher_post') }}">
+  <label>المعلم</label>
+  <select name="teacher_id" required>
+    <option value="">-- اختر --</option>
+    {% for tchr in teachers %}
+      <option value="{{ tchr.id }}">{{ tchr.name_ar }}</option>
+    {% endfor %}
+  </select>
+  <button class="btn" type="submit">{{ t('save') }}</button>
+</form>
+{% endblock %}

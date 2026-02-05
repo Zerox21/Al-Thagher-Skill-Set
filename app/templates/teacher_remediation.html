@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block content %}
+<h1 class="h1">رفع خطة علاجية</h1>
+
+<form method="post" enctype="multipart/form-data" class="card" action="{{ url_for('teacher.remediation_post') }}">
+  <label>الطالب</label>
+  <select name="student_id" required>
+    <option value="">-- اختر --</option>
+    {% for s in students %}
+      <option value="{{ s.id }}">{{ s.name_ar }} ({{ s.student_id }})</option>
+    {% endfor %}
+  </select>
+
+  <label>المهارة</label>
+  <select name="skill_id" required>
+    <option value="">-- اختر --</option>
+    {% for sk in skills %}
+      <option value="{{ sk.id }}">{{ sk.name_ar }}</option>
+    {% endfor %}
+  </select>
+
+  <label>ملاحظات (اختياري)</label>
+  <textarea name="notes_ar" rows="3"></textarea>
+
+  <label>ملف (PDF / PPT / DOCX ...)</label>
+  <input type="file" name="file" required>
+
+  <button class="btn" type="submit">{{ t('upload') }}</button>
+</form>
+
+<div class="card">
+  <h2 class="h2">آخر الملفات المرفوعة</h2>
+  {% if not remediations %}
+    <p class="muted">لا يوجد.</p>
+  {% else %}
+    <ul>
+      {% for r in remediations %}
+        <li>طالب #{{ r.student_id }} — مهارة #{{ r.skill_id }} —
+          <a class="link" href="{{ url_for('media.file', media_id=r.file_media_id) }}">{{ t('download') }}</a>
+        </li>
+      {% endfor %}
+    </ul>
+  {% endif %}
+</div>
+{% endblock %}

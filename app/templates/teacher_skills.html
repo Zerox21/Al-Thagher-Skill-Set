@@ -2,7 +2,7 @@
 {% block content %}
 <h1 class="h1">{{ t('skills') }}</h1>
 
-<form method="post" class="card" action="{{ url_for('chairman.skill_create') }}">
+<form method="post" class="card" action="{{ url_for('teacher.skill_create') }}">
   <label>اسم المهارة</label><input name="name_ar" required>
   <label>وصف</label><textarea name="description_ar" rows="3"></textarea>
   <label>الترتيب</label><input name="order" type="number" value="1">
@@ -19,8 +19,8 @@
       <tr>
         <td>{{ s.order }}</td><td>{{ s.name_ar }}</td><td>{{ s.time_limit_min }}</td><td>{{ s.pass_threshold }}%</td>
         <td>
-          <a class="btn small ghost" href="{{ url_for('chairman.skill_edit', skill_id=s.id) }}">تعديل</a>
-          <form method="post" action="{{ url_for('chairman.skill_delete', skill_id=s.id) }}" style="display:inline">
+          <a class="btn small ghost" href="{{ url_for('teacher.skill_edit', skill_id=s.id) }}">تعديل</a>
+          <form method="post" action="{{ url_for('teacher.skill_delete', skill_id=s.id) }}" style="display:inline">
             <button class="btn small" type="submit" onclick="return confirm('حذف المهارة؟')">حذف</button>
           </form>
         </td>

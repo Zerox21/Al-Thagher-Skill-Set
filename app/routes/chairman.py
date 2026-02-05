@@ -1,645 +1,235 @@
-from __future__ import annotations
-import csv, io
-from datetime import datetime
-from werkzeug.security import generate_password_hash
-from flask import Blueprint, render_template, redirect, url_for, flash, request, current_app
+from flask import Blueprint, render_template, request, redirect, url_for, flash, abort
 from flask_login import login_required, current_user
-from .. import db
-from ..models import User, Skill, StudentSkill, Attempt, Question
+from sqlalchemy import func
+from app import db
+from app.models import User, Skill, Question, Attempt
 
 bp = Blueprint("chairman", __name__)
 
-def _ensure_admin():
+def _require_chairman():
     if current_user.role != "chairman":
-        flash("Chairman access only.", "error")
-        return False
-    return True
+        abort(403)
 
 @bp.get("/dashboard")
 @login_required
 def dashboard():
-    if not _ensure_admin():
-        return redirect(url_for('auth.home'))
-
+    _require_chairman()
     teachers = User.query.filter_by(role="teacher").all()
     students = User.query.filter_by(role="student").all()
-    skills = Skill.query.filter_by(is_active=True).order_by(Skill.order_index.asc()).all()
-    attempts = Attempt.query.filter(Attempt.finished_at.isnot(None)).all()
-
-    perf = []
-    for t in teachers:
-        t_attempts = [a for a in attempts if a.teacher_id == t.id]
-        avg = round(100 * (sum([a.score or 0 for a in t_attempts]) / len(t_attempts)), 2) if t_attempts else 0.0
-        perf.append({"teacher": t, "attempts": len(t_attempts), "avg": avg})
-    perf.sort(key=lambda x: x["avg"], reverse=True)
-
-    sperf = []
-    for s in students:
-        s_attempts = [a for a in attempts if a.student_id == s.id]
-        avg = round(100 * (sum([a.score or 0 for a in s_attempts]) / len(s_attempts)), 2) if s_attempts else 0.0
-        sperf.append({"student": s, "attempts": len(s_attempts), "avg": avg})
-    sperf.sort(key=lambda x: x["avg"])
-
-    return render_template("chairman_dashboard.html", teachers=teachers, students=students, skills=skills, perf=perf, sperf=sperf)
+    skills = Skill.query.order_by(Skill.order.asc()).all()
+    sperf = (db.session.query(User.id, User.name_ar, User.student_id, func.avg(Attempt.score))
+             .outerjoin(Attempt, Attempt.student_id==User.id)
+             .filter(User.role=="student")
+             .group_by(User.id).all())
+    return render_template("chairman_dashboard.html", teachers=teachers, students=students, skills=skills, sperf=sperf)
 
 @bp.get("/users")
 @login_required
 def users():
-    if not _ensure_admin():
-        return redirect(url_for('auth.home'))
-
-    teachers = User.query.filter_by(role="teacher").order_by(User.name.asc()).all()
-    students = User.query.filter_by(role="student").order_by(User.name.asc()).all()
+    _require_chairman()
+    teachers = User.query.filter_by(role="teacher").order_by(User.id.desc()).all()
+    students = User.query.filter_by(role="student").order_by(User.id.desc()).all()
     return render_template("chairman_users.html", teachers=teachers, students=students)
 
-@bp.post("/users/add_teacher")
+@bp.post("/users/teacher")
 @login_required
-def add_teacher():
-    if not _ensure_admin():
-        return redirect(url_for('auth.home'))
-
-    tid = (request.form.get("tid") or "").strip()
-    name = (request.form.get("name") or "").strip()
-    email = (request.form.get("email") or "").strip()
-    pin = (request.form.get("pin") or "1234").strip()
-
-    if not tid or not name:
-        flash("Teacher ID and name required.", "error")
+def create_teacher():
+    _require_chairman()
+    username = (request.form.get("username") or "").strip()
+    name_ar = request.form.get("name_ar") or ""
+    pw = request.form.get("password") or ""
+    if not username or not pw:
+        flash("الرجاء تعبئة البيانات.", "danger")
         return redirect(url_for("chairman.users"))
-
-    if User.query.filter_by(id=tid).first():
-        flash("ID already exists.", "error")
+    if User.query.filter_by(username=username).first():
+        flash("اسم المستخدم موجود.", "danger")
         return redirect(url_for("chairman.users"))
-
-    db.session.add(User(
-        id=tid,
-        role="teacher",
-        name=name,
-        email=email or None,
-        pin_hash=generate_password_hash(pin),
-    ))
+    t = User(username=username, name_ar=name_ar or username, role="teacher")
+    t.set_password(pw)
+    db.session.add(t)
     db.session.commit()
-    flash("Teacher added.", "ok")
+    flash("تم إنشاء المعلم.", "success")
     return redirect(url_for("chairman.users"))
 
-@bp.post("/users/import_students")
+@bp.post("/users/student")
 @login_required
-def import_students():
-    if not _ensure_admin():
-        return redirect(url_for('auth.home'))
-
-    f = request.files.get("csv_file")
-    if not f or not f.filename:
-        flash("Upload CSV file.", "error")
+def create_student():
+    _require_chairman()
+    student_id = (request.form.get("student_id") or "").strip()
+    name_ar = request.form.get("name_ar") or ""
+    teacher_id = int(request.form.get("teacher_id") or 0) or None
+    pw = request.form.get("password") or ""
+    if not student_id or not pw:
+        flash("الرجاء تعبئة البيانات.", "danger")
         return redirect(url_for("chairman.users"))
-
-    content = f.read().decode("utf-8-sig")
-    reader = csv.DictReader(io.StringIO(content))
-    created, updated = 0, 0
-
-    skills = Skill.query.filter_by(is_active=True).order_by(Skill.order_index.asc()).all()
-
-    for row in reader:
-        sid = (row.get("student_id") or "").strip()
-        name = (row.get("name") or "").strip()
-        pin = (row.get("pin") or "1234").strip()
-        teacher_id = (row.get("teacher_id") or "").strip()
-
-        if not sid or not name:
-            continue
-
-        u = User.query.filter_by(id=sid, role="student").first()
-        if not u:
-            u = User(
-                id=sid,
-                role="student",
-                name=name,
-                teacher_id=teacher_id or None,
-                pin_hash=generate_password_hash(pin),
-            )
-            db.session.add(u)
-            created += 1
-        else:
-            u.name = name
-            u.teacher_id = teacher_id or u.teacher_id
-            updated += 1
-
-        db.session.flush()
-
-        for sk in skills:
-            perm = StudentSkill.query.filter_by(student_id=u.id, skill_id=sk.id).first()
-            if not perm:
-                allowed = (sk.order_index == 1)
-                db.session.add(StudentSkill(student_id=u.id, skill_id=sk.id, allowed=allowed))
-
+    if User.query.filter_by(student_id=student_id).first():
+        flash("رقم الطالب موجود.", "danger")
+        return redirect(url_for("chairman.users"))
+    u = User(username=f"student_{student_id}", name_ar=name_ar or f"طالب {student_id}", role="student", student_id=student_id, teacher_id=teacher_id)
+    u.set_password(pw)
+    db.session.add(u)
     db.session.commit()
-    flash(f"Students imported. Created: {created}, Updated: {updated}.", "ok")
+    flash("تم إنشاء الطالب وإضافته للقائمة.", "success")
     return redirect(url_for("chairman.users"))
 
 @bp.get("/skills")
 @login_required
 def skills():
-    if not _ensure_admin():
-        return redirect(url_for('auth.home'))
-
-    skills = Skill.query.order_by(Skill.order_index.asc()).all()
+    _require_chairman()
+    skills = Skill.query.order_by(Skill.order.asc()).all()
     return render_template("chairman_skills.html", skills=skills)
 
-@bp.post("/skills/add")
+@bp.post("/skills")
 @login_required
-def add_skill():
-    if not _ensure_admin():
-        return redirect(url_for('auth.home'))
-
-    name = (request.form.get("name") or "").strip()
-    order_index = int(request.form.get("order_index") or "0")
-    duration_min = int(request.form.get("duration_min") or "0") or None
-
-    pass_pct_raw = request.form.get("pass_pct")
-    pass_pct = int(pass_pct_raw) if pass_pct_raw and str(pass_pct_raw).strip() else None
-
-    if not name:
-        flash("Skill name required.", "error")
-        return redirect(url_for("chairman.skills"))
-
-    sk = Skill(name=name, order_index=order_index, duration_min=duration_min, pass_pct=pass_pct, is_active=True)
-    db.session.add(sk)
+def skill_create():
+    _require_chairman()
+    name_ar = request.form.get("name_ar") or ""
+    desc = request.form.get("description_ar") or ""
+    order = int(request.form.get("order") or 0)
+    pass_th = int(request.form.get("pass_threshold") or 60)
+    tl = int(request.form.get("time_limit_min") or 10)
+    s = Skill(name_ar=name_ar, description_ar=desc, order=order, pass_threshold=pass_th, time_limit_min=tl)
+    db.session.add(s)
     db.session.commit()
-
-    students = User.query.filter_by(role="student").all()
-    for stu in students:
-        db.session.add(StudentSkill(student_id=stu.id, skill_id=sk.id, allowed=False))
-    db.session.commit()
-
-    flash("Skill added.", "ok")
+    flash("تم إضافة المهارة.", "success")
     return redirect(url_for("chairman.skills"))
 
-@bp.get("/question_tool")
+@bp.route("/skills/<int:skill_id>/edit", methods=["GET","POST"])
+@login_required
+def skill_edit(skill_id: int):
+    _require_chairman()
+    s = Skill.query.get_or_404(skill_id)
+    if request.method == "GET":
+        return render_template("skill_form.html", skill=s, action=url_for("chairman.skill_edit", skill_id=s.id))
+    s.name_ar = request.form.get("name_ar") or s.name_ar
+    s.description_ar = request.form.get("description_ar") or s.description_ar
+    s.order = int(request.form.get("order") or s.order or 0)
+    s.pass_threshold = int(request.form.get("pass_threshold") or s.pass_threshold or 60)
+    s.time_limit_min = int(request.form.get("time_limit_min") or s.time_limit_min or 10)
+    db.session.commit()
+    flash("تم تحديث المهارة.", "success")
+    return redirect(url_for("chairman.skills"))
+
+@bp.post("/skills/<int:skill_id>/delete")
+@login_required
+def skill_delete(skill_id: int):
+    _require_chairman()
+    # delete dependents to avoid FK issues in Postgres
+    from app.models import Attempt, Report, Remediation, ImportBatch, ImportItem, StudentSkillStatus
+    Question.query.filter_by(skill_id=skill_id).delete(synchronize_session=False)
+
+    attempt_ids = [a.id for a in Attempt.query.filter_by(skill_id=skill_id).all()]
+    if attempt_ids:
+        Report.query.filter(Report.attempt_id.in_(attempt_ids)).delete(synchronize_session=False)
+    Attempt.query.filter_by(skill_id=skill_id).delete(synchronize_session=False)
+    Remediation.query.filter_by(skill_id=skill_id).delete(synchronize_session=False)
+    StudentSkillStatus.query.filter_by(skill_id=skill_id).delete(synchronize_session=False)
+
+    batch_ids = [b.id for b in ImportBatch.query.filter_by(skill_id=skill_id).all()]
+    if batch_ids:
+        ImportItem.query.filter(ImportItem.batch_id.in_(batch_ids)).delete(synchronize_session=False)
+    ImportBatch.query.filter_by(skill_id=skill_id).delete(synchronize_session=False)
+
+    s = Skill.query.get_or_404(skill_id)
+    db.session.delete(s)
+    db.session.commit()
+    flash("تم حذف المهارة.", "success")
+    return redirect(url_for("chairman.skills"))
+
+@bp.get("/questions")
 @login_required
 def question_tool():
-    if not _ensure_admin():
-        return redirect(url_for('auth.home'))
+    _require_chairman()
+    skills = Skill.query.order_by(Skill.order.asc()).all()
+    skill_id = request.args.get("skill_id", type=int)
+    qs = Question.query.filter_by(skill_id=skill_id).order_by(Question.id.desc()).all() if skill_id else []
+    return render_template("chairman_questions.html", skills=skills, skill_id=skill_id, questions=qs)
 
-    skills = Skill.query.filter_by(is_active=True).order_by(Skill.order_index.asc()).all()
-    questions = Question.query.order_by(Question.id.desc()).limit(500).all()
-    return render_template("question_tool.html", skills=skills, questions=questions, role=current_user.role)
-
-@bp.post("/question_tool/add")
+@bp.route("/questions/new", methods=["GET","POST"])
 @login_required
-def add_question():
-    if not _ensure_admin():
-        return redirect(url_for('auth.home'))
+def question_new():
+    _require_chairman()
+    skills = Skill.query.order_by(Skill.order.asc()).all()
+    if request.method == "GET":
+        return render_template("question_form.html", skills=skills, q=None, action=url_for("chairman.question_new"))
+    # create
+    skill_id = int(request.form.get("skill_id") or 0)
+    qtype = request.form.get("qtype") or "mcq_single"
+    prompt_ar = request.form.get("prompt_ar") or ""
+    choices_raw = request.form.get("choices_ar") or ""
+    correct_raw = request.form.get("correct") or ""
 
-    import json
-    skill_id = int(request.form.get("skill_id"))
-    qtype = request.form.get("qtype")
-    prompt = (request.form.get("prompt") or "").strip()
-    options = (request.form.get("options") or "").strip()
-    answer = (request.form.get("answer") or "").strip()
-    meta = (request.form.get("meta") or "").strip()
+    options = None
+    if qtype in ("mcq_single","mcq_multi","tf","video_checkpoint"):
+        ch=[]
+        for line in choices_raw.splitlines():
+            line=line.strip()
+            if not line: continue
+            if "|" in line:
+                cid, txt = line.split("|",1)
+            else:
+                cid=str(len(ch)+1)
+                txt=line
+            ch.append({"id":cid.strip(), "text_ar":txt.strip()})
+        options={"choices":ch} if ch else None
 
-    if not prompt:
-        flash("Prompt required.", "error")
-        return redirect(url_for("chairman.question_tool"))
-
-    options_json = None
-    if options:
-        opts = [x.strip() for x in options.split("\n") if x.strip()]
-        options_json = json.dumps(opts, ensure_ascii=False)
-
-    answer_json = None
-    try:
-        if qtype == "mcq_multi":
-            answer_json = json.dumps([int(x.strip()) for x in answer.split(",") if x.strip()], ensure_ascii=False)
-        elif qtype == "short_text":
-            answer_json = json.dumps(answer, ensure_ascii=False)
-        else:
-            answer_json = json.dumps(int(answer), ensure_ascii=False) if answer != "" else None
-    except Exception:
-        answer_json = json.dumps(answer, ensure_ascii=False) if qtype == "short_text" else None
-
-    meta_json = None
-    if meta:
-        m = meta.strip()
-        meta_json = m if (m.startswith("{") or m.startswith("[")) else json.dumps(m, ensure_ascii=False)
-
-    q = Question(
-        skill_id=skill_id,
-        qtype=qtype,
-        prompt=prompt,
-        options_json=options_json,
-        answer_json=answer_json,
-        meta_json=meta_json,
-        status="approved",
-        created_by_id=current_user.id,
-        created_by_role=current_user.role,
-        approved_by_id=current_user.id,
-        approved_at=datetime.utcnow(),
-    )
+    correct_json={"answers":[c.strip() for c in correct_raw.split(",") if c.strip()]} if correct_raw else {"answers":[]}
+    media=None; meta=None
+    if qtype=="video_checkpoint":
+        media={"video_url": request.form.get("video_url") or ""}
+        meta={"checkpoint_seconds": int(request.form.get("checkpoint_seconds") or 0)}
+    q = Question(skill_id=skill_id, qtype=qtype, prompt_ar=prompt_ar, options_json=options, correct_json=correct_json, media_json=media, meta_json=meta)
     db.session.add(q)
     db.session.commit()
+    flash("تم إضافة السؤال.", "success")
+    return redirect(url_for("chairman.question_tool", skill_id=skill_id))
 
-    flash("Question added (approved).", "ok")
-    return redirect(url_for("chairman.question_tool"))
-
-@bp.post("/question_tool/approve/<int:question_id>")
-@login_required
-def question_approve(question_id: int):
-    if not _ensure_admin():
-        return redirect(url_for('auth.home'))
-
-    q = Question.query.get(question_id)
-    if not q:
-        flash("Question not found.", "error")
-        return redirect(url_for("chairman.question_tool"))
-
-    from ..qutils import is_approvable
-    ok, msg = is_approvable(q.qtype, q.options_json, q.answer_json)
-    if not ok:
-        flash(f"Cannot approve: {msg}", "error")
-        return redirect(url_for("chairman.question_tool"))
-
-    q.status = "approved"
-    q.approved_by_id = current_user.id
-    q.approved_at = datetime.utcnow()
-    db.session.commit()
-
-    flash("Question approved.", "ok")
-    return redirect(url_for("chairman.question_tool"))
-
-@bp.get("/export/attempts.csv")
-@login_required
-def export_attempts_csv():
-    if not _ensure_admin():
-        return redirect(url_for('auth.home'))
-
-    import csv, io
-    from flask import Response
-
-    attempts = Attempt.query.filter(Attempt.finished_at.isnot(None)).order_by(Attempt.finished_at.desc()).all()
-    output = io.StringIO()
-    w = csv.writer(output)
-    w.writerow(["attempt_id","student_id","student_name","teacher_id","teacher_name","skill","started_at","finished_at","duration_sec","score_pct","passed"])
-    for a in attempts:
-        w.writerow([
-            a.id, a.student_id, a.student.name if a.student else "",
-            a.teacher_id, a.teacher.name if a.teacher else "",
-            a.skill.name if a.skill else "",
-            a.started_at, a.finished_at, a.duration_sec,
-            int(round((a.score or 0)*100)),
-            a.passed
-        ])
-    return Response(output.getvalue(), mimetype="text/csv", headers={"Content-Disposition":"attachment; filename=attempts.csv"})
-
-@bp.get("/export/students.csv")
-@login_required
-def export_students_csv():
-    if not _ensure_admin():
-        return redirect(url_for('auth.home'))
-
-    import csv, io
-    from flask import Response
-
-    students = User.query.filter_by(role="student").order_by(User.id.asc()).all()
-    output = io.StringIO()
-    w = csv.writer(output)
-    w.writerow(["student_id","name","teacher_id"])
-    for s in students:
-        w.writerow([s.id, s.name, s.teacher_id or ""])
-    return Response(output.getvalue(), mimetype="text/csv", headers={"Content-Disposition":"attachment; filename=students.csv"})
-
-@bp.get("/export/teachers.csv")
-@login_required
-def export_teachers_csv():
-    if not _ensure_admin():
-        return redirect(url_for('auth.home'))
-
-    import csv, io
-    from flask import Response
-
-    teachers = User.query.filter_by(role="teacher").order_by(User.id.asc()).all()
-    output = io.StringIO()
-    w = csv.writer(output)
-    w.writerow(["teacher_id","name","email"])
-    for t in teachers:
-        w.writerow([t.id, t.name, t.email or ""])
-    return Response(output.getvalue(), mimetype="text/csv", headers={"Content-Disposition":"attachment; filename=teachers.csv"})
-
-
-@bp.get("/question_tool/edit/<int:question_id>")
+@bp.route("/questions/<int:question_id>/edit", methods=["GET","POST"])
 @login_required
 def question_edit(question_id: int):
-    if not _ensure_admin():
-        return redirect(url_for('auth.home'))
-
-    q = Question.query.get(question_id)
-    if not q:
-        flash("Question not found.", "error")
-        return redirect(url_for("chairman.question_tool"))
-
-    skills = Skill.query.filter_by(is_active=True).order_by(Skill.order_index.asc()).all()
-    return render_template("chairman_question_edit.html", q=q, skills=skills)
-
-@bp.post("/question_tool/edit/<int:question_id>")
-@login_required
-def question_edit_post(question_id: int):
-    if not _ensure_admin():
-        return redirect(url_for('auth.home'))
-
-    import json
-    q = Question.query.get(question_id)
-    if not q:
-        flash("Question not found.", "error")
-        return redirect(url_for("chairman.question_tool"))
-
-    q.skill_id = int(request.form.get("skill_id"))
-    q.qtype = request.form.get("qtype")
-    q.prompt = (request.form.get("prompt") or "").strip()
-
-    options = (request.form.get("options") or "").strip()
-    answer = (request.form.get("answer") or "").strip()
-    meta = (request.form.get("meta") or "").strip()
-
-    if options:
-        opts = [x.strip() for x in options.split("\n") if x.strip()]
-        q.options_json = json.dumps(opts, ensure_ascii=False)
-    else:
-        q.options_json = None
-
-    try:
-        if q.qtype == "mcq_multi":
-            q.answer_json = json.dumps([int(x.strip()) for x in answer.split(",") if x.strip()], ensure_ascii=False)
-        elif q.qtype == "short_text":
-            q.answer_json = json.dumps(answer, ensure_ascii=False)
-        else:
-            q.answer_json = json.dumps(int(answer), ensure_ascii=False) if answer != "" else None
-    except Exception:
-        q.answer_json = json.dumps(answer, ensure_ascii=False) if q.qtype == "short_text" else None
-
-    if meta:
-        m = meta.strip()
-        q.meta_json = m if (m.startswith("{") or m.startswith("[")) else json.dumps(m, ensure_ascii=False)
-    else:
-        q.meta_json = None
-
-    db.session.commit()
-    flash("Question updated.", "ok")
-    return redirect(url_for("chairman.question_tool"))
-
-@bp.get("/doc_import")
-@login_required
-def doc_import():
-    if not _ensure_admin():
-        return redirect(url_for('auth.home'))
-    skills = Skill.query.filter_by(is_active=True).order_by(Skill.order_index.asc()).all()
-    return render_template("chairman_doc_import.html", skills=skills)
-
-@bp.post("/doc_import")
-@login_required
-def doc_import_post():
-    if not _ensure_admin():
-        return redirect(url_for('auth.home'))
-
-    import os, json
-    import re
-    from flask import current_app
-    from ..doc_import import render_pdf_pages_to_images, split_docx_text_to_questions
-    from docx import Document
-
-    f = request.files.get("file")
-    default_skill_id = int(request.form.get("default_skill_id") or "0") or None
-
-    if not f or not f.filename:
-        flash("Upload a PDF or DOCX.", "error")
-        return redirect(url_for("chairman.doc_import"))
-
-    name = f.filename
-    ext = name.rsplit(".",1)[-1].lower() if "." in name else ""
-    if ext not in {"pdf","docx"}:
-        flash("Only PDF or DOCX supported.", "error")
-        return redirect(url_for("chairman.doc_import"))
-
-    if not default_skill_id:
-        flash("Choose a default skill.", "error")
-        return redirect(url_for("chairman.doc_import"))
-
-    base_dir = os.path.join(current_app.config["MEDIA_DIR"], "imports", "chairman", current_user.id)
-    os.makedirs(base_dir, exist_ok=True)
-    safe = "".join([c if c.isalnum() or c in "._-" else "_" for c in name]).strip("_") or f"upload.{ext}"
-    src_path = os.path.join(base_dir, safe)
-    f.save(src_path)
-
-    created = 0
-    if ext == "pdf":
-        out_dir = os.path.join(current_app.config["MEDIA_DIR"], "pdf_imports")
-        os.makedirs(out_dir, exist_ok=True)
-        prefix = re.sub(r"[^A-Za-z0-9_-]+", "_", safe.rsplit(".",1)[0])[:40] or "pdf"
-        imgs = render_pdf_pages_to_images(src_path, out_dir, prefix=prefix)
-        for img in imgs:
-            rel = f"pdf_imports/{img}"
-            q = Question(
-                skill_id=default_skill_id,
-                qtype="image_mcq_single",
-                prompt=f"Imported from PDF: {safe} — page {img.split('_p')[-1].split('.')[0]}",
-                options_json=None,
-                answer_json=None,
-                meta_json=json.dumps({"image_media": rel}, ensure_ascii=False),
-                status="draft",
-                created_by_id=current_user.id,
-                created_by_role="chairman",
-            )
-            db.session.add(q)
-            created += 1
-        db.session.commit()
-        flash(f"Imported {created} draft questions (one per page). Edit each to add options & answer, then approve.", "ok")
-        return redirect(url_for("chairman.question_tool"))
-
-    doc = Document(src_path)
-    full_text = "\n".join([p.text for p in doc.paragraphs if p.text])
-    qs = split_docx_text_to_questions(full_text)
-    if not qs:
-        qs = [full_text] if full_text.strip() else []
-    for i, qtext in enumerate(qs, start=1):
-        q = Question(
-            skill_id=default_skill_id,
-            qtype="short_text",
-            prompt=f"Imported from DOCX: {safe}\n\n{qtext}",
-            options_json=None,
-            answer_json=None,
-            meta_json=None,
-            status="draft",
-            created_by_id=current_user.id,
-            created_by_role="chairman",
-        )
-        db.session.add(q)
-        created += 1
-    db.session.commit()
-    flash(f"Imported {created} draft questions from DOCX. Review and set type/options/answer, then approve.", "ok")
-    return redirect(url_for("chairman.question_tool"))
-
-
-@bp.get("/media")
-@login_required
-def media_library():
-    if not _ensure_admin():
-        return redirect(url_for('auth.home'))
-
-    import os
-    from flask import current_app
-
-    media_dir = os.path.join(current_app.config["MEDIA_DIR"], "chairman", current_user.id)
-    os.makedirs(media_dir, exist_ok=True)
-    files = [n for n in sorted(os.listdir(media_dir)) if os.path.isfile(os.path.join(media_dir, n))]
-    return render_template("chairman_media.html", files=files)
-
-@bp.post("/media/upload")
-@login_required
-def media_upload():
-    if not _ensure_admin():
-        return redirect(url_for('auth.home'))
-
-    import os
-    from flask import current_app
-
-    f = request.files.get("file")
-    if not f or not f.filename:
-        flash("Select a file.", "error")
-        return redirect(url_for("chairman.media_library"))
-
-    ext = f.filename.rsplit(".", 1)[-1].lower() if "." in f.filename else ""
-    if ext not in current_app.config["MEDIA_ALLOWED_EXT"]:
-        flash("Media type not allowed.", "error")
-        return redirect(url_for("chairman.media_library"))
-
-    safe = "".join([c if c.isalnum() or c in "._-" else "_" for c in f.filename]).strip("_") or ("media." + ext)
-
-    media_dir = os.path.join(current_app.config["MEDIA_DIR"], "chairman", current_user.id)
-    os.makedirs(media_dir, exist_ok=True)
-    f.save(os.path.join(media_dir, safe))
-
-    flash("Uploaded.", "ok")
-    return redirect(url_for("chairman.media_library"))
-
-
-
-@bp.get("/question_import")
-@login_required
-def question_import():
-    if not _ensure_admin():
-        return redirect(url_for('auth.home'))
-    skills = Skill.query.filter_by(is_active=True).order_by(Skill.order_index.asc()).all()
-    return render_template("chairman_question_import.html", skills=skills)
-
-@bp.post("/question_import/upload")
-@login_required
-def question_import_upload():
-    if not _ensure_admin():
-        return redirect(url_for('auth.home'))
-
-    import io
-    import csv
-    import json
-    from openpyxl import load_workbook
-
-    f = request.files.get("file")
-    default_skill_id = int(request.form.get("default_skill_id") or "0") or None
-
-    if not f or not f.filename:
-        flash("Upload a CSV/XLSX file.", "error")
-        return redirect(url_for("chairman.question_import"))
-
-    name = f.filename.lower()
-    rows = []
-
-    if name.endswith(".csv"):
-        content = f.read().decode("utf-8-sig")
-        reader = csv.DictReader(io.StringIO(content))
-        rows = list(reader)
-    elif name.endswith(".xlsx"):
-        wb = load_workbook(f, data_only=True)
-        ws = wb.active
-        headers = [str(c.value).strip() if c.value is not None else "" for c in next(ws.iter_rows(min_row=1, max_row=1))]
-        for r in ws.iter_rows(min_row=2, values_only=True):
-            d = {headers[i]: (r[i] if i < len(r) else None) for i in range(len(headers))}
-            rows.append(d)
-    else:
-        flash("Only .csv or .xlsx supported.", "error")
-        return redirect(url_for("chairman.question_import"))
-
-    created = 0
-    skipped = 0
-
-    for row in rows:
-        skill_id = row.get("skill_id")
-        skill_name = row.get("skill_name")
-        qtype = (row.get("qtype") or "").strip()
-        prompt = (row.get("prompt") or "").strip()
-        if not prompt or not qtype:
-            skipped += 1
-            continue
-
-        sid = None
-        try:
-            sid = int(skill_id) if skill_id not in (None, "", "None") else None
-        except Exception:
-            sid = None
-        if sid is None and default_skill_id:
-            sid = default_skill_id
-        if sid is None and skill_name:
-            sk = Skill.query.filter_by(name=str(skill_name).strip()).first()
-            sid = sk.id if sk else None
-        if sid is None:
-            skipped += 1
-            continue
-
-        options_raw = (row.get("options") or "").strip()
-        options_json = None
-        if options_raw:
-            opts = [x.strip() for x in str(options_raw).split("|") if x.strip()]
-            options_json = json.dumps(opts, ensure_ascii=False)
-
-        ans_raw = row.get("answer")
-        answer_json = None
-        try:
-            if qtype == "mcq_multi":
-                answer_json = json.dumps([int(x.strip()) for x in str(ans_raw).split(",") if x.strip()], ensure_ascii=False)
-            elif qtype == "short_text":
-                answer_json = json.dumps(str(ans_raw or ""), ensure_ascii=False)
+    _require_chairman()
+    q = Question.query.get_or_404(question_id)
+    skills = Skill.query.order_by(Skill.order.asc()).all()
+    if request.method == "GET":
+        return render_template("question_form.html", skills=skills, q=q, action=url_for("chairman.question_edit", question_id=q.id))
+    # update
+    q.skill_id = int(request.form.get("skill_id") or q.skill_id)
+    q.qtype = request.form.get("qtype") or q.qtype
+    q.prompt_ar = request.form.get("prompt_ar") or q.prompt_ar
+    # keep simple: parse choices/correct same as teacher
+    choices_raw = request.form.get("choices_ar") or ""
+    correct_raw = request.form.get("correct") or ""
+    options = None
+    if q.qtype in ("mcq_single","mcq_multi","tf","video_checkpoint"):
+        ch=[]
+        for line in choices_raw.splitlines():
+            line=line.strip()
+            if not line: continue
+            if "|" in line:
+                cid, txt = line.split("|",1)
             else:
-                answer_json = json.dumps(int(ans_raw), ensure_ascii=False) if ans_raw not in (None, "", "None") else None
-        except Exception:
-            answer_json = json.dumps(str(ans_raw or ""), ensure_ascii=False) if qtype == "short_text" else None
-
-        meta = (row.get("meta_json") or row.get("meta") or "")
-        meta_json = None
-        if meta not in (None, "", "None"):
-            m = str(meta).strip()
-            meta_json = m if (m.startswith("{") or m.startswith("[")) else json.dumps(m, ensure_ascii=False)
-
-        q = Question(
-            skill_id=sid,
-            qtype=qtype,
-            prompt=prompt,
-            options_json=options_json,
-            answer_json=answer_json,
-            meta_json=meta_json,
-            status="draft",
-            created_by_id=current_user.id,
-            created_by_role=current_user.role,
-        )
-        db.session.add(q)
-        created += 1
-
+                cid=str(len(ch)+1)
+                txt=line
+            ch.append({"id":cid.strip(), "text_ar":txt.strip()})
+        options={"choices":ch} if ch else None
+    q.options_json = options
+    q.correct_json = {"answers":[c.strip() for c in correct_raw.split(",") if c.strip()]} if correct_raw else {"answers":[]}
+    if q.qtype=="video_checkpoint":
+        q.media_json={"video_url": request.form.get("video_url") or ""}
+        q.meta_json={"checkpoint_seconds": int(request.form.get("checkpoint_seconds") or 0)}
+    else:
+        q.media_json=None; q.meta_json=None
     db.session.commit()
-    flash(f"Imported drafts. Created: {created}, Skipped: {skipped}. Approve when ready.", "ok")
-    return redirect(url_for("chairman.question_tool"))
+    flash("تم حفظ السؤال.", "success")
+    return redirect(url_for("chairman.question_tool", skill_id=q.skill_id))
 
-
-
-@bp.get("/debug/endpoints")
+@bp.post("/questions/<int:question_id>/delete")
 @login_required
-def debug_endpoints():
-    if not _ensure_admin():
-        return redirect(url_for('auth.home'))
-    eps = sorted(list(current_app.view_functions.keys()))
-    return render_template("chairman_debug_endpoints.html", endpoints=eps)
+def question_delete(question_id: int):
+    _require_chairman()
+    q = Question.query.get_or_404(question_id)
+    sid = q.skill_id
+    db.session.delete(q)
+    db.session.commit()
+    flash("تم حذف السؤال.", "success")
+    return redirect(url_for("chairman.question_tool", skill_id=sid))

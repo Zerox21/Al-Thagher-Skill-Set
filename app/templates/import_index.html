@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block content %}
+<h1 class="h1">{{ t('import_questions') }}</h1>
+
+<form method="post" action="{{ url_for('imports.upload') }}" enctype="multipart/form-data" class="card">
+  <label>اختر مهارة</label>
+  <select name="skill_id" required>
+    <option value="">--</option>
+    {% for s in skills %}<option value="{{ s.id }}">{{ s.name_ar }}</option>{% endfor %}
+  </select>
+  <label>ملف PDF أو DOCX</label>
+  <input type="file" name="file" required>
+  <button class="btn" type="submit">{{ t('upload') }}</button>
+</form>
+
+<div class="card">
+  <h2 class="h2">عمليات الاستيراد</h2>
+  {% if not batches %}
+    <p class="muted">لا يوجد.</p>
+  {% else %}
+    <ul>
+      {% for b in batches %}
+        <li>#{{ b.id }} — {{ b.filename }} ({{ b.source_type }}) —
+          <a class="link" href="{{ url_for('imports.review', batch_id=b.id) }}">مراجعة</a> — الحالة: {{ b.status }}
+        </li>
+      {% endfor %}
+    </ul>
+  {% endif %}
+</div>
+{% endblock %}
