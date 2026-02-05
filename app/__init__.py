@@ -25,7 +25,14 @@ def create_app():
 
     @login_manager.user_loader
     def load_user(user_id: str):
-        return User.query.get(int(user_id))
+        # Be defensive: old deployments (or different apps on the same domain)
+        # may leave a session cookie where the stored user_id is not numeric.
+        # Returning None treats the visitor as anonymous instead of crashing.
+        try:
+            uid = int(user_id)
+        except (TypeError, ValueError):
+            return None
+        return User.query.get(uid)
 
     from app.i18n import t, get_lang, set_lang
 
